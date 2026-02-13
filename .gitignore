@@ -1,0 +1,29 @@
+# macOS / OS files
+.DS_Store
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Rust build artifacts
+/data_enricher/target/
+
+# Generated pipeline outputs and caches
+/data/
+/tmp/
+*.sqlite
+*.sqlite3
+*.db
+*.parquet
