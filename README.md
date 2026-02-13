@@ -2,7 +2,7 @@
 
 ## Data source
 
-- Source dataset: [Medicaid Provider Spending | Medicaid Open Data Portal](https://opendata.hhs.gov/datasets/medicaid-provider-spending/)
+- Source dataset: [HHS Medicaid Provider Spending](https://opendata.hhs.gov/datasets/medicaid-provider-spending/)
 
 ## Dataset schema
 
