@@ -7,9 +7,16 @@ pub fn maybe_upload_outputs(
     args: &Args,
     npi_mapping_csv: &Path,
     hcpcs_mapping_csv: &Path,
+    npi_api_reference_parquet: &Path,
+    hcpcs_api_reference_parquet: &Path,
     output_path: &Path,
 ) -> Result<()> {
-    if !args.hf_upload_mapping && !args.hf_upload_hcpcs_mapping && !args.hf_upload_enriched {
+    if !args.hf_upload_mapping
+        && !args.hf_upload_hcpcs_mapping
+        && !args.hf_upload_npi_reference
+        && !args.hf_upload_hcpcs_reference
+        && !args.hf_upload_enriched
+    {
         return Ok(());
     }
 
@@ -55,6 +62,46 @@ pub fn maybe_upload_outputs(
             .unwrap_or(file_name_for_repo(hcpcs_mapping_csv)?);
         upload_file_to_hf(
             hcpcs_mapping_csv,
+            &path_in_repo,
+            repo_id,
+            &args.hf_repo_type,
+            token,
+        )?;
+    }
+
+    if args.hf_upload_npi_reference {
+        if !npi_api_reference_parquet.exists() {
+            bail!(
+                "NPI API reference upload requested but file does not exist: {}",
+                npi_api_reference_parquet.display()
+            );
+        }
+        let path_in_repo = args
+            .hf_npi_reference_path_in_repo
+            .clone()
+            .unwrap_or(file_name_for_repo(npi_api_reference_parquet)?);
+        upload_file_to_hf(
+            npi_api_reference_parquet,
+            &path_in_repo,
+            repo_id,
+            &args.hf_repo_type,
+            token,
+        )?;
+    }
+
+    if args.hf_upload_hcpcs_reference {
+        if !hcpcs_api_reference_parquet.exists() {
+            bail!(
+                "HCPCS API reference upload requested but file does not exist: {}",
+                hcpcs_api_reference_parquet.display()
+            );
+        }
+        let path_in_repo = args
+            .hf_hcpcs_reference_path_in_repo
+            .clone()
+            .unwrap_or(file_name_for_repo(hcpcs_api_reference_parquet)?);
+        upload_file_to_hf(
+            hcpcs_api_reference_parquet,
             &path_in_repo,
             repo_id,
             &args.hf_repo_type,

@@ -1,0 +1,40 @@
+DATA ELEMENT,LOCATION,COBOL PIC,DESCRIPTION
+DATA RECORD,,,
+Filler,1-1,x(1),Value Quote
+Year,2-5,x(4),Effective Calendar Year for Payment Amounts
+Filler,6-8,x(3),"Value Quote, Comma, Quote"
+Carrier Number,9-13,x(5),HCFA-Assigned Identification Number
+Filler,14-16,x(3),"Value Quote, Comma, Quote"
+Locality,17-18,x(2),Identification of Pricing Locality
+Filler,19-21,x(3),"Value Quote, Comma, Quote"
+HCPCS Code,22-26,x(5),CPT or Level 2 HCPCS code number for the service. NOTE: See copyright statement on cover sheet.
+Filler,27-29,x(3),"Value Quote, Comma, Quote"
+Modifier,30-31,x(2),"For diagnostic tests, a blank in this field denotes the global service and the following modifiers identify the components:<br>--26 = Professional component<br>--TC = Technical component<br>For services other than those with a professional and/or technical component, a blank will appear in this field with one exception: the presence of CPT modifier -53 indicates that separate RVUs and a fee schedule amount have been established for procedures which the physician terminated before completion. In the 2004 MPFSDB, this modifier is used only with colonoscopy code 45378, G0105, and G0121. Any other codes billed with modifier –53 are subject to carrier medical review and priced by individual consideration."
+Filler,32-34,x(3),"Value Quote, Comma, Quote"
+Non Facility Fee Schedule Amount,35-44,9(7).99,"Pricing amount for the non-facility setting. If applicable, the payment amount has been capped at the level of the OPPS Payment Amount mandated by Section 5102(b) of the Deficit Reduction Act of 2005 (See column 107-116 for the OPPS Amounts that are to be used to reduce these payment amounts.).<br>For a description of the computation of the full fee schedule amount, refer to the Federal Register Final Rule for the Medicare Physician Fee Schedule.<br>The Medicare limiting charge is set by law at 115 percent of the payment amount for the service furnished by the nonparticipating physician. However, the law sets the payment amount for nonparticipating physicians at 95 percent of the payment amount for participating physicians (i.e. the full fee schedule amount). Calculating 95 percent of 115 percent of an amount is equivalent to multiplying the amount by a factor of 1.0925 (or 109.25 percent). Therefore, to calculate the Medicare limiting charge for a physician service for a locality, multiply the full fee schedule amount by a factor of 1.0925. The result is the Medicare limiting charge for that service for that locality to which the full fee schedule amount applies."
+Filler,45-47,x(3),"Value Quote, Comma, Quote"
+Facility Fee Schedule Amount,48-57,9(7).99,"Pricing amount for the facility setting. If applicable, the payment amount has been capped at the level of the OPPS Payment Amount mandated by Section 5102(b) of the Deficit Reduction Act of 2005 (See column 120-129 for the OPPS Amounts that are to be used to reduce these payment amounts.)."
+Filler,58-60,x(3),"Value Quote, Comma, Quote"
+Filler,61-61,x(1),
+Filler,62-64,x(3),"Value Quote, Comma, Quote"
+PCTC Indicator,65-65,x(1),
+Filler,66-68,x(3),"Value Quote, Comma, Quote"
+Status Code,69-69,x(1),
+Filler,70-72,x(3),"Value Quote, Comma, Quote"
+Multiple Surgery Indicator,73-73,x(1),
+Filler,74-76,x(3),"Value Quote, Comma, Quote"
+50% Therapy Reduction Amount,77-86,9(7).99,Pricing amount that reflects 50 percent payment for the PE for services furnished in office and other noninstitutional settings (services paid under section 1848 of the Act).
+Flat Visit Fee,,,"Effective January 1, 2021, this field may also contain the Flat Visit Fee for the Primary Care First Model (FFS 11896)."
+Filler,87-89,x(3),"Value Quote, Comma, Quote"
+50% Therapy Reduction Amount,90-99,9(7).99,Pricing amount that reflects 50 percent payment for the PE for services furnished in an institutional setting (services paid under section 1834 of the Act).
+Filler,100-102,x(3),"Value Quote, Comma, Quote"
+OPPS Indicator,103-103,x(1),
+Filler,104-106,x(3),"Value Quote, Comma, Quote"
+OPPS Non Facility Fee Amount,107-116,9(7).99,Pricing amount for the non-facility setting that has been capped at the level of the OPPS Payment Amount mandated by Section 5102(b) of the Deficit Reduction Act of 2005.
+Filler,117-119,x(3),"Value Quote, Comma, Quote"
+OPPS Facility Fee Amount,120-129,9(7).99,Pricing amount for the facility setting that has been capped at the level of the OPPS Payment Amount mandated by Section 5102(b) of the Deficit Reduction Act of 2005.
+Filler,130-130,x(1),Value Quote
+TRAILER RECORD,,,
+Filler,1-1,x(1),Value Quote
+Trailer Indicator,2-4,x(3),Value TRL.
+Copyright Statement,5-98,x(94),

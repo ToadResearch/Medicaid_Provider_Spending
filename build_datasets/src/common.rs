@@ -4,8 +4,12 @@ use std::{
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
 use tokio::time::{Instant, sleep};
@@ -141,4 +145,35 @@ pub async fn wait_for_rate_slot(next_slot: &Arc<Mutex<Instant>>, min_interval: D
         sleep(*guard - now).await;
     }
     *guard = Instant::now() + min_interval;
+}
+
+pub fn install_ctrlc_handler(shutdown_requested: Arc<AtomicBool>) {
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            let was_set = shutdown_requested.swap(true, Ordering::SeqCst);
+            if !was_set {
+                eprintln!(
+                    "\nReceived Ctrl-C. Finishing in-flight work, saving progress, and exiting safely..."
+                );
+            }
+        }
+    });
+}
+
+pub fn now_unix_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or_default()
+}
+
+pub fn now_unix_millis() -> i128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i128)
+        .unwrap_or_default()
+}
+
+pub fn new_api_run_id() -> String {
+    format!("api-run-{}", now_unix_millis())
 }

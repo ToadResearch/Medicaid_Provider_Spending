@@ -18,12 +18,17 @@ __pycache__/
 *.py[cod]
 
 # Rust build artifacts
-/data_enricher/target/
+/build_datasets/target/
 
 # Generated pipeline outputs and caches
-/data/
+/data/*
+!/data/.gitkeep
+!/data/README.md
+!/data/manually_cleaned/
+!/data/manually_cleaned/**
 /tmp/
 *.sqlite
 *.sqlite3
 *.db
 *.parquet
+logs/
