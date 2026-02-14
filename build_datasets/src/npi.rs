@@ -60,6 +60,25 @@ impl NpiCache {
                 fetched_at_unix INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_npi_cache_status ON npi_cache(status);
+            CREATE TABLE IF NOT EXISTS npi_api_responses (
+                npi TEXT PRIMARY KEY,
+                basic_json TEXT,
+                addresses_json TEXT,
+                practice_locations_json TEXT,
+                taxonomies_json TEXT,
+                identifiers_json TEXT,
+                other_names_json TEXT,
+                endpoints_json TEXT,
+                url TEXT,
+                error_message TEXT,
+                api_run_id TEXT,
+                requested_at_utc TEXT,
+                request_params_json TEXT,
+                results_json TEXT,
+                response_json_raw TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_npi_api_responses_requested_at
+                ON npi_api_responses(requested_at_utc);
             ",
         )
         .context("Failed initializing NPI cache schema")?;
@@ -123,6 +142,242 @@ impl NpiCache {
                 params![npi, provider_name, status, error_message],
             )
             .with_context(|| format!("Failed updating NPI cache for {npi}"))?;
+        Ok(())
+    }
+
+    fn upsert_api_responses(&mut self, rows: &[NpiApiReferenceRow]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self
+            .conn
+            .transaction()
+            .context("Failed starting NPI API responses transaction")?;
+        let mut stmt = tx
+            .prepare(
+                "
+                INSERT INTO npi_api_responses (
+                    npi,
+                    basic_json,
+                    addresses_json,
+                    practice_locations_json,
+                    taxonomies_json,
+                    identifiers_json,
+                    other_names_json,
+                    endpoints_json,
+                    url,
+                    error_message,
+                    api_run_id,
+                    requested_at_utc,
+                    request_params_json,
+                    results_json,
+                    response_json_raw
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
+                )
+                ON CONFLICT(npi) DO UPDATE SET
+                    basic_json = excluded.basic_json,
+                    addresses_json = excluded.addresses_json,
+                    practice_locations_json = excluded.practice_locations_json,
+                    taxonomies_json = excluded.taxonomies_json,
+                    identifiers_json = excluded.identifiers_json,
+                    other_names_json = excluded.other_names_json,
+                    endpoints_json = excluded.endpoints_json,
+                    url = excluded.url,
+                    error_message = excluded.error_message,
+                    api_run_id = excluded.api_run_id,
+                    requested_at_utc = excluded.requested_at_utc,
+                    request_params_json = excluded.request_params_json,
+                    results_json = excluded.results_json,
+                    response_json_raw = excluded.response_json_raw
+                WHERE excluded.requested_at_utc > npi_api_responses.requested_at_utc
+                   OR npi_api_responses.requested_at_utc IS NULL
+                ",
+            )
+            .context("Failed preparing NPI API responses upsert statement")?;
+        for row in rows {
+            stmt.execute(params![
+                row.npi.as_str(),
+                row.basic_json.as_deref(),
+                row.addresses_json.as_deref(),
+                row.practice_locations_json.as_deref(),
+                row.taxonomies_json.as_deref(),
+                row.identifiers_json.as_deref(),
+                row.other_names_json.as_deref(),
+                row.endpoints_json.as_deref(),
+                row.request_url.as_str(),
+                row.error_message.as_deref(),
+                row.api_run_id.as_str(),
+                row.requested_at_utc.as_str(),
+                row.request_params_json.as_str(),
+                row.results_json.as_deref(),
+                row.response_json_raw.as_deref(),
+            ])
+            .with_context(|| format!("Failed upserting NPI API response row for {}", row.npi))?;
+        }
+        drop(stmt);
+        tx.commit()
+            .context("Failed committing NPI API responses transaction")?;
+        Ok(())
+    }
+
+    fn export_api_responses_parquet(&self, output_path: &Path) -> Result<()> {
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "Failed creating NPI API responses parent directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+
+        let file_name = output_path
+            .file_name()
+            .and_then(|x| x.to_str())
+            .unwrap_or("npi.parquet");
+        let tmp_csv_path = output_path.with_file_name(format!("{file_name}.tmp.csv"));
+        let tmp_parquet_path = output_path.with_file_name(format!("{file_name}.tmp"));
+        let null_token = "\\N";
+
+        let mut writer = Writer::from_path(&tmp_csv_path).with_context(|| {
+            format!(
+                "Failed creating temp NPI API responses CSV {}",
+                tmp_csv_path.display()
+            )
+        })?;
+        writer
+            .write_record([
+                "npi",
+                "basic",
+                "addresses",
+                "practice_locations",
+                "taxonomies",
+                "identifiers",
+                "other_names",
+                "endpoints",
+                "url",
+                "error_message",
+                "api_run_id",
+                "requested_at_utc",
+                "request_params",
+                "results",
+                "response_json",
+            ])
+            .context("Failed writing NPI API responses header")?;
+
+        let mut stmt = self
+            .conn
+            .prepare(
+                "
+                SELECT
+                    npi,
+                    basic_json,
+                    addresses_json,
+                    practice_locations_json,
+                    taxonomies_json,
+                    identifiers_json,
+                    other_names_json,
+                    endpoints_json,
+                    url,
+                    error_message,
+                    api_run_id,
+                    requested_at_utc,
+                    request_params_json,
+                    results_json,
+                    response_json_raw
+                FROM npi_api_responses
+                ORDER BY npi
+                ",
+            )
+            .context("Failed preparing NPI API responses export query")?;
+        let mut rows = stmt
+            .query([])
+            .context("Failed querying NPI API responses rows")?;
+
+        while let Some(row) = rows
+            .next()
+            .context("Failed iterating NPI API responses rows")?
+        {
+            let npi: String = row.get(0).context("Failed reading npi")?;
+            let basic_json: Option<String> = row.get(1).context("Failed reading basic_json")?;
+            let addresses_json: Option<String> =
+                row.get(2).context("Failed reading addresses_json")?;
+            let practice_locations_json: Option<String> = row
+                .get(3)
+                .context("Failed reading practice_locations_json")?;
+            let taxonomies_json: Option<String> =
+                row.get(4).context("Failed reading taxonomies_json")?;
+            let identifiers_json: Option<String> =
+                row.get(5).context("Failed reading identifiers_json")?;
+            let other_names_json: Option<String> =
+                row.get(6).context("Failed reading other_names_json")?;
+            let endpoints_json: Option<String> =
+                row.get(7).context("Failed reading endpoints_json")?;
+            let url: Option<String> = row.get(8).context("Failed reading url")?;
+            let error_message: Option<String> =
+                row.get(9).context("Failed reading error_message")?;
+            let api_run_id: Option<String> = row.get(10).context("Failed reading api_run_id")?;
+            let requested_at_utc: Option<String> =
+                row.get(11).context("Failed reading requested_at_utc")?;
+            let request_params_json: Option<String> =
+                row.get(12).context("Failed reading request_params_json")?;
+            let results_json: Option<String> =
+                row.get(13).context("Failed reading results_json")?;
+            let response_json_raw: Option<String> =
+                row.get(14).context("Failed reading response_json_raw")?;
+
+            let field = |value: Option<String>| value.unwrap_or_else(|| null_token.to_string());
+
+            writer
+                .write_record([
+                    npi,
+                    field(basic_json),
+                    field(addresses_json),
+                    field(practice_locations_json),
+                    field(taxonomies_json),
+                    field(identifiers_json),
+                    field(other_names_json),
+                    field(endpoints_json),
+                    field(url),
+                    field(error_message),
+                    field(api_run_id),
+                    field(requested_at_utc),
+                    field(request_params_json),
+                    field(results_json),
+                    field(response_json_raw),
+                ])
+                .context("Failed writing NPI API responses row")?;
+        }
+
+        writer
+            .flush()
+            .context("Failed flushing NPI API responses CSV writer")?;
+
+        let conn = Connection::open_in_memory()
+            .context("Failed opening DuckDB for NPI API responses export")?;
+        let csv_escaped = sql_escape_path(&tmp_csv_path);
+        let parquet_escaped = sql_escape_path(&tmp_parquet_path);
+        conn.execute_batch(&format!(
+            "COPY (
+                SELECT * FROM read_csv_auto('{csv_escaped}', header=true, nullstr='{null_token}', all_varchar=true)
+            ) TO '{parquet_escaped}' (FORMAT PARQUET);"
+        ))
+        .context("Failed writing NPI API responses parquet")?;
+
+        fs::remove_file(&tmp_csv_path).with_context(|| {
+            format!(
+                "Failed deleting temp NPI API responses CSV {}",
+                tmp_csv_path.display()
+            )
+        })?;
+        fs::rename(&tmp_parquet_path, output_path).with_context(|| {
+            format!(
+                "Failed moving temp NPI API responses parquet {} to {}",
+                tmp_parquet_path.display(),
+                output_path.display()
+            )
+        })?;
         Ok(())
     }
 
@@ -217,7 +472,6 @@ struct NpiApiReferenceRow {
     identifiers_json: Option<String>,
     other_names_json: Option<String>,
     endpoints_json: Option<String>,
-    result_count: Option<i64>,
     request_url: String,
     http_status: Option<i64>,
     error_message: Option<String>,
@@ -248,7 +502,7 @@ pub async fn build_npi_mapping(
     input_path: &Path,
     cache_db: &Path,
     mapping_csv: &Path,
-    api_reference_parquet: &Path,
+    api_responses_parquet: &Path,
     api_run_id: &str,
     progress_hub: Option<Arc<MultiProgress>>,
     shutdown_requested: Arc<AtomicBool>,
@@ -263,7 +517,7 @@ pub async fn build_npi_mapping(
     );
     let target_npis: HashSet<&str> = unique_npis.iter().map(String::as_str).collect();
 
-    let cache = NpiCache::open(cache_db)?;
+    let mut cache = NpiCache::open(cache_db)?;
     let (resolved_before_bulk, _) = cache.classify_for_lookup(&unique_npis)?;
     let mut monthly_loaded = 0usize;
     let mut weekly_loaded = 0usize;
@@ -361,12 +615,13 @@ pub async fn build_npi_mapping(
         api_reference_rows = rows;
     }
 
+    cache.upsert_api_responses(&api_reference_rows)?;
     cache.export_mapping_csv(mapping_csv)?;
     println!("Wrote NPI mapping CSV {}", mapping_csv.display());
-    export_npi_api_reference_parquet(&api_reference_rows, api_reference_parquet)?;
+    cache.export_api_responses_parquet(api_responses_parquet)?;
     println!(
-        "Wrote NPI API reference dataset {}",
-        api_reference_parquet.display()
+        "Wrote NPI API responses dataset {}",
+        api_responses_parquet.display()
     );
     Ok(interrupted || shutdown_requested.load(Ordering::SeqCst))
 }
@@ -375,9 +630,8 @@ pub fn is_npi_dataset_complete(
     input_path: &Path,
     cache_db: &Path,
     mapping_csv: &Path,
-    api_reference_parquet: &Path,
 ) -> Result<bool> {
-    if !cache_db.exists() || !mapping_csv.exists() || !api_reference_parquet.exists() {
+    if !cache_db.exists() || !mapping_csv.exists() {
         return Ok(false);
     }
 
@@ -385,6 +639,118 @@ pub fn is_npi_dataset_complete(
     let cache = NpiCache::open(cache_db)?;
     let (_, missing_npis) = cache.classify_for_lookup(&unique_npis)?;
     Ok(missing_npis.is_empty())
+}
+
+pub fn export_npi_api_responses_parquet(cache_db: &Path, output_path: &Path) -> Result<()> {
+    let cache = NpiCache::open(cache_db)?;
+    cache.export_api_responses_parquet(output_path)
+}
+
+pub fn backfill_npi_api_responses_from_legacy_parquet(
+    cache_db: &Path,
+    legacy_parquet: &Path,
+) -> Result<usize> {
+    if !legacy_parquet.exists() {
+        return Ok(0);
+    }
+
+    let mut cache = NpiCache::open(cache_db)?;
+    let existing: i64 = cache
+        .conn
+        .query_row("SELECT COUNT(*) FROM npi_api_responses", [], |row| {
+            row.get(0)
+        })
+        .context("Failed checking NPI API responses row count")?;
+    if existing > 0 {
+        return Ok(0);
+    }
+
+    let conn = Connection::open_in_memory()
+        .context("Failed opening DuckDB for NPI legacy parquet import")?;
+    let legacy_escaped = sql_escape_path(legacy_parquet);
+    let query = format!(
+        "
+        SELECT * EXCLUDE (rn) FROM (
+            SELECT
+                npi,
+                basic_json,
+                addresses_json,
+                practice_locations_json,
+                taxonomies_json,
+                identifiers_json,
+                other_names_json,
+                endpoints_json,
+                request_url,
+                error_message,
+                api_run_id,
+                requested_at_utc,
+                request_params_json,
+                results_json,
+                response_json_raw,
+                row_number() OVER (PARTITION BY npi ORDER BY requested_at_utc DESC) AS rn
+            FROM read_parquet('{legacy_escaped}')
+        ) WHERE rn = 1
+        "
+    );
+
+    let mut stmt = conn
+        .prepare(&query)
+        .context("Failed preparing DuckDB query for NPI legacy parquet import")?;
+    let mut rows = stmt
+        .query([])
+        .context("Failed querying DuckDB for NPI legacy parquet import")?;
+
+    let mut imported = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .context("Failed iterating DuckDB rows for NPI legacy parquet import")?
+    {
+        let npi: String = row.get(0).context("Failed reading npi")?;
+        let basic_json: Option<String> = row.get(1).context("Failed reading basic_json")?;
+        let addresses_json: Option<String> = row.get(2).context("Failed reading addresses_json")?;
+        let practice_locations_json: Option<String> = row
+            .get(3)
+            .context("Failed reading practice_locations_json")?;
+        let taxonomies_json: Option<String> =
+            row.get(4).context("Failed reading taxonomies_json")?;
+        let identifiers_json: Option<String> =
+            row.get(5).context("Failed reading identifiers_json")?;
+        let other_names_json: Option<String> =
+            row.get(6).context("Failed reading other_names_json")?;
+        let endpoints_json: Option<String> = row.get(7).context("Failed reading endpoints_json")?;
+        let request_url: Option<String> = row.get(8).context("Failed reading request_url")?;
+        let error_message: Option<String> = row.get(9).context("Failed reading error_message")?;
+        let api_run_id: Option<String> = row.get(10).context("Failed reading api_run_id")?;
+        let requested_at_utc: Option<String> =
+            row.get(11).context("Failed reading requested_at_utc")?;
+        let request_params_json: Option<String> =
+            row.get(12).context("Failed reading request_params_json")?;
+        let results_json: Option<String> = row.get(13).context("Failed reading results_json")?;
+        let response_json_raw: Option<String> =
+            row.get(14).context("Failed reading response_json_raw")?;
+
+        imported.push(NpiApiReferenceRow {
+            npi,
+            basic_json,
+            addresses_json,
+            practice_locations_json,
+            taxonomies_json,
+            identifiers_json,
+            other_names_json,
+            endpoints_json,
+            request_url: request_url.unwrap_or_default(),
+            http_status: None,
+            error_message,
+            api_run_id: api_run_id.unwrap_or_default(),
+            requested_at_utc: requested_at_utc.unwrap_or_default(),
+            request_params_json: request_params_json.unwrap_or_default(),
+            results_json,
+            response_json_raw,
+        });
+    }
+
+    cache.upsert_api_responses(&imported)?;
+    Ok(imported.len())
 }
 
 pub fn collect_unresolved_npis(
@@ -602,7 +968,6 @@ fn build_npi_reference_row_from_value(
 ) -> NpiApiReferenceRow {
     let results = response_value.get("results").and_then(Value::as_array);
     let first_result = results.and_then(|values| values.first());
-    let result_count = response_value.get("result_count").and_then(Value::as_i64);
 
     NpiApiReferenceRow {
         npi: npi.to_string(),
@@ -615,7 +980,6 @@ fn build_npi_reference_row_from_value(
         identifiers_json: json_to_string_opt(first_result.and_then(|v| v.get("identifiers"))),
         other_names_json: json_to_string_opt(first_result.and_then(|v| v.get("other_names"))),
         endpoints_json: json_to_string_opt(first_result.and_then(|v| v.get("endpoints"))),
-        result_count,
         request_url: request_url.to_string(),
         http_status: Some(http_status),
         error_message: None,
@@ -627,102 +991,8 @@ fn build_npi_reference_row_from_value(
     }
 }
 
-fn export_npi_api_reference_parquet(rows: &[NpiApiReferenceRow], output_path: &Path) -> Result<()> {
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "Failed creating NPI API reference parent directory {}",
-                parent.display()
-            )
-        })?;
-    }
-
-    let file_name = output_path
-        .file_name()
-        .and_then(|x| x.to_str())
-        .unwrap_or("npi_api_reference.parquet");
-    let tmp_csv_path = output_path.with_file_name(format!("{file_name}.tmp.csv"));
-    let tmp_parquet_path = output_path.with_file_name(format!("{file_name}.tmp"));
-
-    let mut writer = Writer::from_path(&tmp_csv_path).with_context(|| {
-        format!(
-            "Failed creating temp NPI API reference CSV {}",
-            tmp_csv_path.display()
-        )
-    })?;
-    writer
-        .write_record([
-            "npi",
-            "basic_json",
-            "addresses_json",
-            "practice_locations_json",
-            "taxonomies_json",
-            "identifiers_json",
-            "other_names_json",
-            "endpoints_json",
-            "result_count",
-            "request_url",
-            "http_status",
-            "error_message",
-            "api_run_id",
-            "requested_at_utc",
-            "request_params_json",
-            "results_json",
-            "response_json_raw",
-        ])
-        .context("Failed writing NPI API reference header")?;
-
-    for row in rows {
-        writer
-            .write_record([
-                row.npi.clone(),
-                row.basic_json.clone().unwrap_or_default(),
-                row.addresses_json.clone().unwrap_or_default(),
-                row.practice_locations_json.clone().unwrap_or_default(),
-                row.taxonomies_json.clone().unwrap_or_default(),
-                row.identifiers_json.clone().unwrap_or_default(),
-                row.other_names_json.clone().unwrap_or_default(),
-                row.endpoints_json.clone().unwrap_or_default(),
-                row.result_count.map(|v| v.to_string()).unwrap_or_default(),
-                row.request_url.clone(),
-                row.http_status.map(|v| v.to_string()).unwrap_or_default(),
-                row.error_message.clone().unwrap_or_default(),
-                row.api_run_id.clone(),
-                row.requested_at_utc.clone(),
-                row.request_params_json.clone(),
-                row.results_json.clone().unwrap_or_default(),
-                row.response_json_raw.clone().unwrap_or_default(),
-            ])
-            .context("Failed writing NPI API reference row")?;
-    }
-    writer
-        .flush()
-        .context("Failed flushing NPI API reference CSV writer")?;
-
-    let conn = Connection::open_in_memory()
-        .context("Failed opening DuckDB for NPI API reference export")?;
-    let csv_escaped = sql_escape_path(&tmp_csv_path);
-    let parquet_escaped = sql_escape_path(&tmp_parquet_path);
-    conn.execute_batch(&format!(
-        "COPY (SELECT * FROM read_csv_auto('{csv_escaped}', header=true)) TO '{parquet_escaped}' (FORMAT PARQUET);"
-    ))
-    .context("Failed writing NPI API reference parquet")?;
-
-    fs::remove_file(&tmp_csv_path).with_context(|| {
-        format!(
-            "Failed deleting temp NPI API reference CSV {}",
-            tmp_csv_path.display()
-        )
-    })?;
-    fs::rename(&tmp_parquet_path, output_path).with_context(|| {
-        format!(
-            "Failed moving temp NPI API reference parquet {} to {}",
-            tmp_parquet_path.display(),
-            output_path.display()
-        )
-    })?;
-    Ok(())
-}
+// NOTE: NPI API response parquet export is handled via NpiCache::export_api_responses_parquet,
+// backed by the `npi_api_responses` table.
 
 fn select_latest_nppes_csv(dir: &Path) -> Result<Option<PathBuf>> {
     let mut candidates = collect_nppes_csvs(dir)?;
@@ -1273,7 +1543,6 @@ async fn fetch_npi_name(
         identifiers_json: None,
         other_names_json: None,
         endpoints_json: None,
-        result_count: None,
         request_url: request_url.clone(),
         http_status: None,
         error_message: None,

@@ -1,0 +1,46 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+@import 'maplibre-gl/dist/maplibre-gl.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg0: #070a12;
+  --bg1: #0b1224;
+  --fg0: #e9edf8;
+  --fg1: rgba(233, 237, 248, 0.78);
+  --muted: rgba(233, 237, 248, 0.55);
+  --card: rgba(255, 255, 255, 0.06);
+  --card2: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.14);
+  --accent: #69f0d2;
+  --accent2: #7aa7ff;
+  --warn: #ffca6b;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  color: var(--fg0);
+  background:
+    radial-gradient(1200px 700px at 20% -10%, rgba(122, 167, 255, 0.22), transparent 60%),
+    radial-gradient(900px 600px at 90% 10%, rgba(105, 240, 210, 0.16), transparent 55%),
+    radial-gradient(800px 600px at 50% 110%, rgba(255, 202, 107, 0.10), transparent 60%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
+}
+
+.glass {
+  background: var(--card);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(10px);
+}
+
+.chip {
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+}

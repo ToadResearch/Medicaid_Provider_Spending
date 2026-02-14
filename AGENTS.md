@@ -17,25 +17,21 @@ Guidance for coding agents working in this repository.
   - `data/raw/cpt/`
   - `data/cache/{npi,hcpcs}/`
   - `data/mappings/{npi,hcpcs}/`
-  - `data/reference/{npi,hcpcs}/`
   - `data/output/`
 
 ## Primary workflow
 
 1. Download dataset:
    - `./download.sh`
-2. Build mappings only (optional):
-   - `./build_datasets.sh --build-map-only`
-3. Full enrichment:
+2. Build mappings + API-response artifacts (resumable, cached):
    - `./build_datasets.sh`
 
 ## Mapping/cache behavior
 
 - NPI and HCPCS mapping outputs are cached on disk under `data/cache/` and `data/mappings/`.
-- API reference datasets are exported under `data/reference/`.
+- API response datasets are exported under `data/output/` (`npi.parquet`, `hcpcs.parquet`).
 - Unresolved identifiers report is exported at end of run to `data/unresolved_identifiers.csv` (override with `--unresolved-report-csv`).
-- If mapping/reference outputs exist and cache coverage is complete for the current input, default runs do not rebuild them.
-- If enriched output already exists and mappings were unchanged in that run, default runs do not rebuild enrichment output.
+- If mapping/API-response outputs exist and cache coverage is complete for the current input, default runs do not rebuild them.
 - Rebuild mappings with:
   - `--rebuild-map`
 - Reset and rebuild with:
@@ -53,15 +49,14 @@ Guidance for coding agents working in this repository.
 - Ctrl-C triggers graceful shutdown: complete in-flight work, save cache/maps, then exit.
 - `build_datasets.sh --log-file` should keep progress bars visible in interactive terminals.
 - During retry cooldowns, progress bars temporarily switch to a seconds countdown before resuming lookup progress.
-- Reference dataset column order should stay human-readable: primary business fields first, metadata/raw JSON fields last.
+- API response dataset column order should stay human-readable: primary business fields first, metadata/raw JSON fields last.
 
 ## Data semantics to preserve
 
-- HCPCS enrichment is date-aware using `CLAIM_FROM_MONTH`.
+- HCPCS mapping rows include effective date fields; downstream joins should be date-aware using `CLAIM_FROM_MONTH`.
 - Prefer non-NOC HCPCS records when multiple records match.
 - If only NOC is available for a code/date, use NOC as fallback.
-- For unresolved NPI/HCPCS codes, keep source identifiers and leave enrichment fields null; use unresolved report for manual follow-up.
-- The enriched upload (`--hf-upload-enriched`) must include all source rows, including unresolved rows with null enrichment fields.
+- For unresolved NPI/HCPCS codes, keep source identifiers and use the unresolved report for manual follow-up.
 
 ## Development expectations
 
@@ -84,4 +79,3 @@ Guidance for coding agents working in this repository.
   - prefer moderate `--hcpcs-batch-size` values (default `100`)
 - Do not remove retry/backoff behavior for transient API failures.
 - Prefer local NPPES data dissemination files for bulk NPI resolution whenever available.
-

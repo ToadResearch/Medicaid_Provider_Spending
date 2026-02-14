@@ -50,7 +50,6 @@ struct HcpcsApiReferenceRow {
     ef_term_dt_json: Option<String>,
     ef_obsolete_json: Option<String>,
     ef_is_noc_json: Option<String>,
-    response_total_count: Option<i64>,
     response_codes_json: Option<String>,
     response_display_json: Option<String>,
     response_extra_fields_json: Option<String>,
@@ -127,10 +126,289 @@ impl HcpcsCache {
             );
             CREATE INDEX IF NOT EXISTS idx_hcpcs_cache_code_status
                 ON hcpcs_cache(hcpcs_code, status);
+            CREATE TABLE IF NOT EXISTS hcpcs_api_responses (
+                hcpcs_code TEXT PRIMARY KEY,
+                ef_short_desc_json TEXT,
+                ef_long_desc_json TEXT,
+                ef_add_dt_json TEXT,
+                ef_act_eff_dt_json TEXT,
+                ef_term_dt_json TEXT,
+                ef_obsolete_json TEXT,
+                ef_is_noc_json TEXT,
+                response_codes_json TEXT,
+                response_display_json TEXT,
+                response_extra_fields_json TEXT,
+                url TEXT,
+                error_message TEXT,
+                api_run_id TEXT,
+                requested_at_utc TEXT,
+                request_params_json TEXT,
+                response_json_raw TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_hcpcs_api_responses_requested_at
+                ON hcpcs_api_responses(requested_at_utc);
             ",
         )
         .context("Failed initializing HCPCS cache schema")?;
         Ok(Self { conn })
+    }
+
+    fn upsert_api_responses(&mut self, rows: &[HcpcsApiReferenceRow]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self
+            .conn
+            .transaction()
+            .context("Failed starting HCPCS API responses transaction")?;
+        let mut stmt = tx
+            .prepare(
+                "
+                INSERT INTO hcpcs_api_responses (
+                    hcpcs_code,
+                    ef_short_desc_json,
+                    ef_long_desc_json,
+                    ef_add_dt_json,
+                    ef_act_eff_dt_json,
+                    ef_term_dt_json,
+                    ef_obsolete_json,
+                    ef_is_noc_json,
+                    response_codes_json,
+                    response_display_json,
+                    response_extra_fields_json,
+                    url,
+                    error_message,
+                    api_run_id,
+                    requested_at_utc,
+                    request_params_json,
+                    response_json_raw
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
+                )
+                ON CONFLICT(hcpcs_code) DO UPDATE SET
+                    ef_short_desc_json = excluded.ef_short_desc_json,
+                    ef_long_desc_json = excluded.ef_long_desc_json,
+                    ef_add_dt_json = excluded.ef_add_dt_json,
+                    ef_act_eff_dt_json = excluded.ef_act_eff_dt_json,
+                    ef_term_dt_json = excluded.ef_term_dt_json,
+                    ef_obsolete_json = excluded.ef_obsolete_json,
+                    ef_is_noc_json = excluded.ef_is_noc_json,
+                    response_codes_json = excluded.response_codes_json,
+                    response_display_json = excluded.response_display_json,
+                    response_extra_fields_json = excluded.response_extra_fields_json,
+                    url = excluded.url,
+                    error_message = excluded.error_message,
+                    api_run_id = excluded.api_run_id,
+                    requested_at_utc = excluded.requested_at_utc,
+                    request_params_json = excluded.request_params_json,
+                    response_json_raw = excluded.response_json_raw
+                WHERE excluded.requested_at_utc > hcpcs_api_responses.requested_at_utc
+                   OR hcpcs_api_responses.requested_at_utc IS NULL
+                ",
+            )
+            .context("Failed preparing HCPCS API responses upsert statement")?;
+        for row in rows {
+            stmt.execute(params![
+                row.hcpcs_code.as_str(),
+                row.ef_short_desc_json.as_deref(),
+                row.ef_long_desc_json.as_deref(),
+                row.ef_add_dt_json.as_deref(),
+                row.ef_act_eff_dt_json.as_deref(),
+                row.ef_term_dt_json.as_deref(),
+                row.ef_obsolete_json.as_deref(),
+                row.ef_is_noc_json.as_deref(),
+                row.response_codes_json.as_deref(),
+                row.response_display_json.as_deref(),
+                row.response_extra_fields_json.as_deref(),
+                row.request_url.as_str(),
+                row.error_message.as_deref(),
+                row.api_run_id.as_str(),
+                row.requested_at_utc.as_str(),
+                row.request_params_json.as_str(),
+                row.response_json_raw.as_deref(),
+            ])
+            .with_context(|| {
+                format!(
+                    "Failed upserting HCPCS API response row for {}",
+                    row.hcpcs_code
+                )
+            })?;
+        }
+        drop(stmt);
+        tx.commit()
+            .context("Failed committing HCPCS API responses transaction")?;
+        Ok(())
+    }
+
+    fn export_api_responses_parquet(&self, output_path: &Path) -> Result<()> {
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "Failed creating HCPCS API responses parent directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+
+        let file_name = output_path
+            .file_name()
+            .and_then(|x| x.to_str())
+            .unwrap_or("hcpcs.parquet");
+        let tmp_csv_path = output_path.with_file_name(format!("{file_name}.tmp.csv"));
+        let tmp_parquet_path = output_path.with_file_name(format!("{file_name}.tmp"));
+        let null_token = "\\N";
+
+        let mut writer = Writer::from_path(&tmp_csv_path).with_context(|| {
+            format!(
+                "Failed creating temp HCPCS API responses CSV {}",
+                tmp_csv_path.display()
+            )
+        })?;
+        writer
+            .write_record([
+                "hcpcs_code",
+                "ef_short_desc",
+                "ef_long_desc",
+                "ef_add_dt",
+                "ef_act_eff_dt",
+                "ef_term_dt",
+                "ef_obsolete",
+                "ef_is_noc",
+                "response_codes",
+                "response_display",
+                "response_extra_fields",
+                "url",
+                "error_message",
+                "api_run_id",
+                "requested_at_utc",
+                "request_params",
+                "response_json",
+            ])
+            .context("Failed writing HCPCS API responses header")?;
+
+        let mut stmt = self
+            .conn
+            .prepare(
+                "
+                SELECT
+                    hcpcs_code,
+                    ef_short_desc_json,
+                    ef_long_desc_json,
+                    ef_add_dt_json,
+                    ef_act_eff_dt_json,
+                    ef_term_dt_json,
+                    ef_obsolete_json,
+                    ef_is_noc_json,
+                    response_codes_json,
+                    response_display_json,
+                    response_extra_fields_json,
+                    url,
+                    error_message,
+                    api_run_id,
+                    requested_at_utc,
+                    request_params_json,
+                    response_json_raw
+                FROM hcpcs_api_responses
+                ORDER BY hcpcs_code
+                ",
+            )
+            .context("Failed preparing HCPCS API responses export query")?;
+        let mut rows = stmt
+            .query([])
+            .context("Failed querying HCPCS API responses rows")?;
+
+        while let Some(row) = rows
+            .next()
+            .context("Failed iterating HCPCS API responses rows")?
+        {
+            let hcpcs_code: String = row.get(0).context("Failed reading hcpcs_code")?;
+            let ef_short_desc_json: Option<String> =
+                row.get(1).context("Failed reading ef_short_desc_json")?;
+            let ef_long_desc_json: Option<String> =
+                row.get(2).context("Failed reading ef_long_desc_json")?;
+            let ef_add_dt_json: Option<String> =
+                row.get(3).context("Failed reading ef_add_dt_json")?;
+            let ef_act_eff_dt_json: Option<String> =
+                row.get(4).context("Failed reading ef_act_eff_dt_json")?;
+            let ef_term_dt_json: Option<String> =
+                row.get(5).context("Failed reading ef_term_dt_json")?;
+            let ef_obsolete_json: Option<String> =
+                row.get(6).context("Failed reading ef_obsolete_json")?;
+            let ef_is_noc_json: Option<String> =
+                row.get(7).context("Failed reading ef_is_noc_json")?;
+            let response_codes_json: Option<String> =
+                row.get(8).context("Failed reading response_codes_json")?;
+            let response_display_json: Option<String> =
+                row.get(9).context("Failed reading response_display_json")?;
+            let response_extra_fields_json: Option<String> = row
+                .get(10)
+                .context("Failed reading response_extra_fields_json")?;
+            let url: Option<String> = row.get(11).context("Failed reading url")?;
+            let error_message: Option<String> =
+                row.get(12).context("Failed reading error_message")?;
+            let api_run_id: Option<String> = row.get(13).context("Failed reading api_run_id")?;
+            let requested_at_utc: Option<String> =
+                row.get(14).context("Failed reading requested_at_utc")?;
+            let request_params_json: Option<String> =
+                row.get(15).context("Failed reading request_params_json")?;
+            let response_json_raw: Option<String> =
+                row.get(16).context("Failed reading response_json_raw")?;
+
+            let field = |value: Option<String>| value.unwrap_or_else(|| null_token.to_string());
+
+            writer
+                .write_record([
+                    hcpcs_code,
+                    field(ef_short_desc_json),
+                    field(ef_long_desc_json),
+                    field(ef_add_dt_json),
+                    field(ef_act_eff_dt_json),
+                    field(ef_term_dt_json),
+                    field(ef_obsolete_json),
+                    field(ef_is_noc_json),
+                    field(response_codes_json),
+                    field(response_display_json),
+                    field(response_extra_fields_json),
+                    field(url),
+                    field(error_message),
+                    field(api_run_id),
+                    field(requested_at_utc),
+                    field(request_params_json),
+                    field(response_json_raw),
+                ])
+                .context("Failed writing HCPCS API responses row")?;
+        }
+
+        writer
+            .flush()
+            .context("Failed flushing HCPCS API responses CSV writer")?;
+
+        let conn = Connection::open_in_memory()
+            .context("Failed opening DuckDB for HCPCS API responses export")?;
+        let csv_escaped = sql_escape_path(&tmp_csv_path);
+        let parquet_escaped = sql_escape_path(&tmp_parquet_path);
+        conn.execute_batch(&format!(
+            "COPY (
+                SELECT * FROM read_csv_auto('{csv_escaped}', header=true, nullstr='{null_token}', all_varchar=true)
+            ) TO '{parquet_escaped}' (FORMAT PARQUET);"
+        ))
+        .context("Failed writing HCPCS API responses parquet")?;
+
+        fs::remove_file(&tmp_csv_path).with_context(|| {
+            format!(
+                "Failed deleting temp HCPCS API responses CSV {}",
+                tmp_csv_path.display()
+            )
+        })?;
+        fs::rename(&tmp_parquet_path, output_path).with_context(|| {
+            format!(
+                "Failed moving temp HCPCS API responses parquet {} to {}",
+                tmp_parquet_path.display(),
+                output_path.display()
+            )
+        })?;
+        Ok(())
     }
 
     fn classify_for_lookup(&self, codes: &[String]) -> Result<(usize, Vec<String>)> {
@@ -319,8 +597,9 @@ impl HcpcsCache {
             ])
             .context("Failed writing HCPCS mapping CSV header")?;
 
-        // Export all successful HCPCS records (including NOC).
-        // Selection preference (non-NOC preferred, NOC fallback) is applied during enrichment.
+        // Export all successful HCPCS records (including NOC). This file is intended for
+        // downstream joins; when multiple rows match for a code/date, prefer non-NOC rows
+        // and fall back to NOC only when that's all that's available.
         // `is_noc` field definition:
         // https://clinicaltables.nlm.nih.gov/apidoc/hcpcs/v3/doc.html
         let mut stmt = self
@@ -693,7 +972,7 @@ pub async fn build_hcpcs_mapping(
     input_path: &Path,
     cache_db: &Path,
     mapping_csv: &Path,
-    api_reference_parquet: &Path,
+    api_responses_parquet: &Path,
     hcpcs_fallback_csv: &Path,
     api_run_id: &str,
     progress_hub: Option<Arc<MultiProgress>>,
@@ -706,7 +985,7 @@ pub async fn build_hcpcs_mapping(
         unique_codes.len()
     );
 
-    let cache = HcpcsCache::open(cache_db)?;
+    let mut cache = HcpcsCache::open(cache_db)?;
     let local_fallback_records = load_local_hcpcs_fallback_records(hcpcs_fallback_csv, true)?;
     let local_fallback_code_count = local_fallback_records.len();
     let (dataset_codes_in_fallback, fallback_ok_before_seed) =
@@ -790,12 +1069,13 @@ pub async fn build_hcpcs_mapping(
         api_reference_rows = rows;
     }
 
+    cache.upsert_api_responses(&api_reference_rows)?;
     cache.export_mapping_csv(mapping_csv)?;
     println!("Wrote HCPCS mapping CSV {}", mapping_csv.display());
-    export_hcpcs_api_reference_parquet(&api_reference_rows, api_reference_parquet)?;
+    cache.export_api_responses_parquet(api_responses_parquet)?;
     println!(
-        "Wrote HCPCS API reference dataset {}",
-        api_reference_parquet.display()
+        "Wrote HCPCS API responses dataset {}",
+        api_responses_parquet.display()
     );
     Ok(interrupted || shutdown_requested.load(Ordering::SeqCst))
 }
@@ -924,10 +1204,9 @@ pub fn is_hcpcs_dataset_complete(
     input_path: &Path,
     cache_db: &Path,
     mapping_csv: &Path,
-    api_reference_parquet: &Path,
     hcpcs_fallback_csv: &Path,
 ) -> Result<bool> {
-    if !cache_db.exists() || !mapping_csv.exists() || !api_reference_parquet.exists() {
+    if !cache_db.exists() || !mapping_csv.exists() {
         return Ok(false);
     }
 
@@ -952,6 +1231,128 @@ pub fn is_hcpcs_dataset_complete(
     }
 
     Ok(true)
+}
+
+pub fn export_hcpcs_api_responses_parquet(cache_db: &Path, output_path: &Path) -> Result<()> {
+    let cache = HcpcsCache::open(cache_db)?;
+    cache.export_api_responses_parquet(output_path)
+}
+
+pub fn backfill_hcpcs_api_responses_from_legacy_parquet(
+    cache_db: &Path,
+    legacy_parquet: &Path,
+) -> Result<usize> {
+    if !legacy_parquet.exists() {
+        return Ok(0);
+    }
+
+    let mut cache = HcpcsCache::open(cache_db)?;
+    let existing: i64 = cache
+        .conn
+        .query_row("SELECT COUNT(*) FROM hcpcs_api_responses", [], |row| {
+            row.get(0)
+        })
+        .context("Failed checking HCPCS API responses row count")?;
+    if existing > 0 {
+        return Ok(0);
+    }
+
+    let conn = Connection::open_in_memory()
+        .context("Failed opening DuckDB for HCPCS legacy parquet import")?;
+    let legacy_escaped = sql_escape_path(legacy_parquet);
+    let query = format!(
+        "
+        SELECT * EXCLUDE (rn) FROM (
+            SELECT
+                hcpcs_code,
+                ef_short_desc_json,
+                ef_long_desc_json,
+                ef_add_dt_json,
+                ef_act_eff_dt_json,
+                ef_term_dt_json,
+                ef_obsolete_json,
+                ef_is_noc_json,
+                response_codes_json,
+                response_display_json,
+                response_extra_fields_json,
+                request_url,
+                error_message,
+                api_run_id,
+                requested_at_utc,
+                request_params_json,
+                response_json_raw,
+                row_number() OVER (PARTITION BY hcpcs_code ORDER BY requested_at_utc DESC) AS rn
+            FROM read_parquet('{legacy_escaped}')
+        ) WHERE rn = 1
+        "
+    );
+
+    let mut stmt = conn
+        .prepare(&query)
+        .context("Failed preparing DuckDB query for HCPCS legacy parquet import")?;
+    let mut rows = stmt
+        .query([])
+        .context("Failed querying DuckDB for HCPCS legacy parquet import")?;
+
+    let mut imported = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .context("Failed iterating DuckDB rows for HCPCS legacy parquet import")?
+    {
+        let hcpcs_code: String = row.get(0).context("Failed reading hcpcs_code")?;
+        let ef_short_desc_json: Option<String> =
+            row.get(1).context("Failed reading ef_short_desc_json")?;
+        let ef_long_desc_json: Option<String> =
+            row.get(2).context("Failed reading ef_long_desc_json")?;
+        let ef_add_dt_json: Option<String> = row.get(3).context("Failed reading ef_add_dt_json")?;
+        let ef_act_eff_dt_json: Option<String> =
+            row.get(4).context("Failed reading ef_act_eff_dt_json")?;
+        let ef_term_dt_json: Option<String> =
+            row.get(5).context("Failed reading ef_term_dt_json")?;
+        let ef_obsolete_json: Option<String> =
+            row.get(6).context("Failed reading ef_obsolete_json")?;
+        let ef_is_noc_json: Option<String> = row.get(7).context("Failed reading ef_is_noc_json")?;
+        let response_codes_json: Option<String> =
+            row.get(8).context("Failed reading response_codes_json")?;
+        let response_display_json: Option<String> =
+            row.get(9).context("Failed reading response_display_json")?;
+        let response_extra_fields_json: Option<String> = row
+            .get(10)
+            .context("Failed reading response_extra_fields_json")?;
+        let request_url: Option<String> = row.get(11).context("Failed reading request_url")?;
+        let error_message: Option<String> = row.get(12).context("Failed reading error_message")?;
+        let api_run_id: Option<String> = row.get(13).context("Failed reading api_run_id")?;
+        let requested_at_utc: Option<String> =
+            row.get(14).context("Failed reading requested_at_utc")?;
+        let request_params_json: Option<String> =
+            row.get(15).context("Failed reading request_params_json")?;
+        let response_json_raw: Option<String> =
+            row.get(16).context("Failed reading response_json_raw")?;
+
+        imported.push(HcpcsApiReferenceRow {
+            hcpcs_code,
+            ef_short_desc_json,
+            ef_long_desc_json,
+            ef_add_dt_json,
+            ef_act_eff_dt_json,
+            ef_term_dt_json,
+            ef_obsolete_json,
+            ef_is_noc_json,
+            response_codes_json,
+            response_display_json,
+            response_extra_fields_json,
+            request_url: request_url.unwrap_or_default(),
+            http_status: None,
+            error_message,
+            api_run_id: api_run_id.unwrap_or_default(),
+            requested_at_utc: requested_at_utc.unwrap_or_default(),
+            request_params_json: request_params_json.unwrap_or_default(),
+            response_json_raw,
+        });
+    }
+
+    cache.upsert_api_responses(&imported)?;
+    Ok(imported.len())
 }
 
 pub fn collect_unresolved_hcpcs(
@@ -1061,9 +1462,6 @@ fn build_hcpcs_reference_row_from_value(
         ef_is_noc_json: extra_obj
             .and_then(|obj| obj.get("is_noc"))
             .and_then(|v| serde_json::to_string(v).ok()),
-        response_total_count: array
-            .and_then(|values| values.first())
-            .and_then(Value::as_i64),
         response_codes_json: array.and_then(|values| json_to_string_opt(values.get(1))),
         response_display_json: array.and_then(|values| json_to_string_opt(values.get(3))),
         response_extra_fields_json: array.and_then(|values| json_to_string_opt(values.get(2))),
@@ -1077,111 +1475,8 @@ fn build_hcpcs_reference_row_from_value(
     }
 }
 
-fn export_hcpcs_api_reference_parquet(
-    rows: &[HcpcsApiReferenceRow],
-    output_path: &Path,
-) -> Result<()> {
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "Failed creating HCPCS API reference parent directory {}",
-                parent.display()
-            )
-        })?;
-    }
-
-    let file_name = output_path
-        .file_name()
-        .and_then(|x| x.to_str())
-        .unwrap_or("hcpcs_api_reference.parquet");
-    let tmp_csv_path = output_path.with_file_name(format!("{file_name}.tmp.csv"));
-    let tmp_parquet_path = output_path.with_file_name(format!("{file_name}.tmp"));
-
-    let mut writer = Writer::from_path(&tmp_csv_path).with_context(|| {
-        format!(
-            "Failed creating temp HCPCS API reference CSV {}",
-            tmp_csv_path.display()
-        )
-    })?;
-    writer
-        .write_record([
-            "hcpcs_code",
-            "ef_short_desc_json",
-            "ef_long_desc_json",
-            "ef_add_dt_json",
-            "ef_act_eff_dt_json",
-            "ef_term_dt_json",
-            "ef_obsolete_json",
-            "ef_is_noc_json",
-            "response_total_count",
-            "response_codes_json",
-            "response_display_json",
-            "response_extra_fields_json",
-            "request_url",
-            "http_status",
-            "error_message",
-            "api_run_id",
-            "requested_at_utc",
-            "request_params_json",
-            "response_json_raw",
-        ])
-        .context("Failed writing HCPCS API reference header")?;
-
-    for row in rows {
-        writer
-            .write_record([
-                row.hcpcs_code.clone(),
-                row.ef_short_desc_json.clone().unwrap_or_default(),
-                row.ef_long_desc_json.clone().unwrap_or_default(),
-                row.ef_add_dt_json.clone().unwrap_or_default(),
-                row.ef_act_eff_dt_json.clone().unwrap_or_default(),
-                row.ef_term_dt_json.clone().unwrap_or_default(),
-                row.ef_obsolete_json.clone().unwrap_or_default(),
-                row.ef_is_noc_json.clone().unwrap_or_default(),
-                row.response_total_count
-                    .map(|v| v.to_string())
-                    .unwrap_or_default(),
-                row.response_codes_json.clone().unwrap_or_default(),
-                row.response_display_json.clone().unwrap_or_default(),
-                row.response_extra_fields_json.clone().unwrap_or_default(),
-                row.request_url.clone(),
-                row.http_status.map(|v| v.to_string()).unwrap_or_default(),
-                row.error_message.clone().unwrap_or_default(),
-                row.api_run_id.clone(),
-                row.requested_at_utc.clone(),
-                row.request_params_json.clone(),
-                row.response_json_raw.clone().unwrap_or_default(),
-            ])
-            .context("Failed writing HCPCS API reference row")?;
-    }
-    writer
-        .flush()
-        .context("Failed flushing HCPCS API reference CSV writer")?;
-
-    let conn = Connection::open_in_memory()
-        .context("Failed opening DuckDB for HCPCS API reference export")?;
-    let csv_escaped = sql_escape_path(&tmp_csv_path);
-    let parquet_escaped = sql_escape_path(&tmp_parquet_path);
-    conn.execute_batch(&format!(
-        "COPY (SELECT * FROM read_csv_auto('{csv_escaped}', header=true)) TO '{parquet_escaped}' (FORMAT PARQUET);"
-    ))
-    .context("Failed writing HCPCS API reference parquet")?;
-
-    fs::remove_file(&tmp_csv_path).with_context(|| {
-        format!(
-            "Failed deleting temp HCPCS API reference CSV {}",
-            tmp_csv_path.display()
-        )
-    })?;
-    fs::rename(&tmp_parquet_path, output_path).with_context(|| {
-        format!(
-            "Failed moving temp HCPCS API reference parquet {} to {}",
-            tmp_parquet_path.display(),
-            output_path.display()
-        )
-    })?;
-    Ok(())
-}
+// NOTE: HCPCS API response parquet export is handled via HcpcsCache::export_api_responses_parquet,
+// backed by the `hcpcs_api_responses` table.
 
 fn extract_unique_hcpcs_codes(input_path: &Path) -> Result<Vec<String>> {
     let conn = Connection::open_in_memory().context("Failed opening DuckDB")?;
@@ -1417,8 +1712,8 @@ async fn resolve_missing_hcpcs(
                                 not_found += 1;
                             }
                         } else {
-                            // Keep both non-NOC and NOC records so enrichment can prefer non-NOC
-                            // and still fall back to NOC when that's all we have.
+                            // Keep both non-NOC and NOC records so downstream joins can prefer
+                            // non-NOC and still fall back to NOC when that's all we have.
                             cache.replace_with_ok_records(&code, &records)?;
                             found += 1;
                         }
@@ -1640,7 +1935,6 @@ async fn fetch_hcpcs_records(
         ef_term_dt_json: None,
         ef_obsolete_json: None,
         ef_is_noc_json: None,
-        response_total_count: None,
         response_codes_json: None,
         response_display_json: None,
         response_extra_fields_json: None,
@@ -2088,9 +2382,6 @@ fn build_hcpcs_reference_row_for_code(
         ef_is_noc_json: filtered_extra_obj
             .get("is_noc")
             .and_then(|v| serde_json::to_string(v).ok()),
-        response_total_count: array
-            .and_then(|values| values.first())
-            .and_then(Value::as_i64),
         response_codes_json: serde_json::to_string(&filtered_codes).ok(),
         response_display_json: serde_json::to_string(&filtered_display).ok(),
         response_extra_fields_json: serde_json::to_string(&filtered_extra_value).ok(),

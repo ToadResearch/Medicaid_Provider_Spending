@@ -22,8 +22,8 @@ Examples:
   ./download.sh
   ./download.sh --run-rust
   ./download.sh --cpt-zip-url "https://example.org/pfrev26a.zip"
-  ./download.sh --run-rust -- --build-map-only
-  ./download.sh --run-rust -- --build-map-only --reset-map
+  ./download.sh --run-rust -- --skip-api
+  ./download.sh --run-rust -- --reset-map
 EOF
 }
 

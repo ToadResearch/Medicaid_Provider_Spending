@@ -29,19 +29,6 @@ pub fn project_root() -> PathBuf {
         .unwrap_or(manifest_dir)
 }
 
-pub fn default_enriched_output_path(input_path: &Path, data_dir: &Path) -> PathBuf {
-    let ext = input_path
-        .extension()
-        .and_then(|x| x.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_else(|| "parquet".to_string());
-    let stem = input_path
-        .file_stem()
-        .and_then(|x| x.to_str())
-        .unwrap_or("medicaid-provider-spending");
-    data_dir.join(format!("{stem}-enriched.{ext}"))
-}
-
 pub fn file_name_from_url(url: &str) -> Result<String> {
     let trimmed = url.trim().trim_end_matches('/');
     let file_name = trimmed

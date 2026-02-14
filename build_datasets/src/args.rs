@@ -4,7 +4,7 @@ use crate::constants::{DEFAULT_DATASET_URL, DEFAULT_HCPCS_API_BASE_URL, DEFAULT_
 
 #[derive(Debug, Parser)]
 #[command(name = "build_datasets")]
-#[command(about = "Build resumable NPI/HCPCS mappings and enrich Medicaid provider spending data")]
+#[command(about = "Build resumable NPI/HCPCS mappings for Medicaid provider spending data")]
 pub struct Args {
     /// Local dataset path (.csv or .parquet). If omitted, it defaults to data/<url-file>.
     #[arg(long)]
@@ -13,10 +13,6 @@ pub struct Args {
     /// Source URL used when input_path does not exist locally.
     #[arg(long, default_value = DEFAULT_DATASET_URL)]
     pub input_url: String,
-
-    /// Enriched output path (.csv or .parquet).
-    #[arg(long)]
-    pub output_path: Option<std::path::PathBuf>,
 
     /// Output CSV path for unresolved identifiers report (NPI + HCPCS).
     #[arg(long)]
@@ -38,23 +34,19 @@ pub struct Args {
     #[arg(long)]
     pub hcpcs_cache_db: Option<std::path::PathBuf>,
 
-    /// NPI API reference dataset output path (.parquet).
+    /// NPI API responses dataset output path (.parquet).
     #[arg(long)]
-    pub npi_api_reference_parquet: Option<std::path::PathBuf>,
+    pub npi_api_responses_parquet: Option<std::path::PathBuf>,
 
-    /// HCPCS API reference dataset output path (.parquet).
+    /// HCPCS API responses dataset output path (.parquet).
     #[arg(long)]
-    pub hcpcs_api_reference_parquet: Option<std::path::PathBuf>,
+    pub hcpcs_api_responses_parquet: Option<std::path::PathBuf>,
 
     /// Optional local CPT/HCPCS fallback CSV used when HCPCS API is missing codes.
     ///
     /// Expected columns: hcpcs_code, short_desc, long_desc (date/flag columns optional).
     #[arg(long)]
     pub hcpcs_fallback_csv: Option<std::path::PathBuf>,
-
-    /// Build mapping files only, skip enrichment.
-    #[arg(long, default_value_t = false)]
-    pub build_map_only: bool,
 
     /// Rebuild mapping files from cache+API even if mapping CSV already exists.
     #[arg(long, default_value_t = false)]
@@ -159,17 +151,13 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub hf_upload_hcpcs_mapping: bool,
 
-    /// Upload NPI API reference parquet to Hugging Face (requires hf_token + hf_repo_id).
+    /// Upload NPI API responses parquet to Hugging Face (requires hf_token + hf_repo_id).
     #[arg(long, default_value_t = false)]
-    pub hf_upload_npi_reference: bool,
+    pub hf_upload_npi: bool,
 
-    /// Upload HCPCS API reference parquet to Hugging Face (requires hf_token + hf_repo_id).
+    /// Upload HCPCS API responses parquet to Hugging Face (requires hf_token + hf_repo_id).
     #[arg(long, default_value_t = false)]
-    pub hf_upload_hcpcs_reference: bool,
-
-    /// Upload enriched dataset to Hugging Face (requires hf_token + hf_repo_id).
-    #[arg(long, default_value_t = false)]
-    pub hf_upload_enriched: bool,
+    pub hf_upload_hcpcs: bool,
 
     /// Destination path for NPI mapping file in Hugging Face repo.
     #[arg(long)]
@@ -179,15 +167,11 @@ pub struct Args {
     #[arg(long)]
     pub hf_hcpcs_mapping_path_in_repo: Option<String>,
 
-    /// Destination path for NPI API reference parquet in Hugging Face repo.
+    /// Destination path for NPI API responses parquet in Hugging Face repo.
     #[arg(long)]
-    pub hf_npi_reference_path_in_repo: Option<String>,
+    pub hf_npi_path_in_repo: Option<String>,
 
-    /// Destination path for HCPCS API reference parquet in Hugging Face repo.
+    /// Destination path for HCPCS API responses parquet in Hugging Face repo.
     #[arg(long)]
-    pub hf_hcpcs_reference_path_in_repo: Option<String>,
-
-    /// Destination path for enriched file in Hugging Face repo.
-    #[arg(long)]
-    pub hf_enriched_path_in_repo: Option<String>,
+    pub hf_hcpcs_path_in_repo: Option<String>,
 }

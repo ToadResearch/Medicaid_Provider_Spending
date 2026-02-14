@@ -12,9 +12,9 @@ Script options:
   -h, --help           Show this help
 
 Examples:
-  ./build_datasets.sh --build-map-only
-  ./build_datasets.sh --log-file ./logs/run.log --build-map-only --skip-api
-  ./build_datasets.sh --log-file ./logs/run.log -- --build-map-only --skip-api
+  ./build_datasets.sh
+  ./build_datasets.sh --log-file ./logs/run.log --skip-api
+  ./build_datasets.sh --log-file ./logs/run.log -- --skip-api
 EOF
 }
 

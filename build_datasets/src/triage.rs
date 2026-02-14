@@ -1,11 +1,7 @@
 use anyhow::{Context, Result};
 use csv::Writer;
 use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    fs,
-    path::Path,
-};
+use std::{collections::HashMap, fs, path::Path};
 
 #[derive(Debug, Deserialize)]
 struct UnresolvedRow {
@@ -46,7 +42,15 @@ fn normalize_identifier(raw: &str) -> String {
 fn is_placeholder(u: &str) -> bool {
     matches!(
         u,
-        "" | "-" | "0" | "00" | "000" | "0000" | "00000" | "000000" | "0000000" | "NONE"
+        "" | "-"
+            | "0"
+            | "00"
+            | "000"
+            | "0000"
+            | "00000"
+            | "000000"
+            | "0000000"
+            | "NONE"
             | "NULL"
             | "N/A"
             | "NA"
@@ -322,8 +326,12 @@ pub fn write_unresolved_identifier_triage(
     fs::create_dir_all(out_dir)
         .with_context(|| format!("Failed creating triage output dir {}", out_dir.display()))?;
 
-    let mut reader = csv::Reader::from_path(input_csv)
-        .with_context(|| format!("Failed opening unresolved identifiers CSV {}", input_csv.display()))?;
+    let mut reader = csv::Reader::from_path(input_csv).with_context(|| {
+        format!(
+            "Failed opening unresolved identifiers CSV {}",
+            input_csv.display()
+        )
+    })?;
 
     let mut hcpcs_rows: Vec<TriageRow> = Vec::new();
     let mut npi_rows: Vec<TriageRow> = Vec::new();
@@ -406,8 +414,9 @@ pub fn write_unresolved_identifier_triage(
             .entry((row.identifier_norm.clone(), row.inferred_code_type.clone()))
             .or_insert(0) += 1;
     }
-    let mut unmapped_unique_items: Vec<((String, String), usize)> = unmapped_unique.into_iter().collect();
-    unmapped_unique_items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0 .0.cmp(&b.0 .0)));
+    let mut unmapped_unique_items: Vec<((String, String), usize)> =
+        unmapped_unique.into_iter().collect();
+    unmapped_unique_items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.0.cmp(&b.0.0)));
     {
         let path = out_dir.join("hcpcs_unmapped_unique_counts.csv");
         let mut writer = Writer::from_path(&path)
@@ -425,7 +434,12 @@ pub fn write_unresolved_identifier_triage(
 
     let unknown_only: Vec<&TriageRow> = hcpcs_rows
         .iter()
-        .filter(|r| matches!(r.inferred_code_type.as_str(), "unknown" | "alphanum_5char_unknown"))
+        .filter(|r| {
+            matches!(
+                r.inferred_code_type.as_str(),
+                "unknown" | "alphanum_5char_unknown"
+            )
+        })
         .collect();
     let unknown_counts = count_by_key(&unknown_only, |r| r.identifier_norm.clone());
     let mut unknown_items: Vec<(String, usize)> =
@@ -495,8 +509,9 @@ pub fn write_unresolved_identifier_triage(
             ))
             .or_insert(0) += 1;
     }
-    let mut concat_items: Vec<((String, String, String, String), usize)> = concat_counts.into_iter().collect();
-    concat_items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0 .0.cmp(&b.0 .0)));
+    let mut concat_items: Vec<((String, String, String, String), usize)> =
+        concat_counts.into_iter().collect();
+    concat_items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.0.cmp(&b.0.0)));
     {
         let path = out_dir.join("hcpcs_concat_unique_counts.csv");
         let mut writer = Writer::from_path(&path)
@@ -544,7 +559,7 @@ pub fn write_unresolved_identifier_triage(
     }
     let mut npi_unmapped_unique_items: Vec<((String, String), usize)> =
         npi_unmapped_unique.into_iter().collect();
-    npi_unmapped_unique_items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0 .0.cmp(&b.0 .0)));
+    npi_unmapped_unique_items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.0.cmp(&b.0.0)));
     {
         let path = out_dir.join("npi_unmapped_unique_counts.csv");
         let mut writer = Writer::from_path(&path)
@@ -567,4 +582,3 @@ pub fn write_unresolved_identifier_triage(
         npi_needs_review_rows: npi_unmapped.len(),
     })
 }
-

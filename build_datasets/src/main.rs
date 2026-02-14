@@ -1,7 +1,6 @@
 mod args;
 mod common;
 mod constants;
-mod enrich;
 mod hcpcs;
 mod npi;
 mod triage;
@@ -23,12 +22,17 @@ use std::{
 
 use args::Args;
 use common::{
-    default_enriched_output_path, delete_if_exists, download_file, file_name_from_url,
-    install_ctrlc_handler, new_api_run_id, project_root,
+    delete_if_exists, download_file, file_name_from_url, install_ctrlc_handler, new_api_run_id,
+    project_root,
 };
-use enrich::enrich_dataset;
-use hcpcs::{build_hcpcs_mapping, collect_unresolved_hcpcs, is_hcpcs_dataset_complete};
-use npi::{build_npi_mapping, collect_unresolved_npis, is_npi_dataset_complete};
+use hcpcs::{
+    backfill_hcpcs_api_responses_from_legacy_parquet, build_hcpcs_mapping,
+    collect_unresolved_hcpcs, export_hcpcs_api_responses_parquet, is_hcpcs_dataset_complete,
+};
+use npi::{
+    backfill_npi_api_responses_from_legacy_parquet, build_npi_mapping, collect_unresolved_npis,
+    export_npi_api_responses_parquet, is_npi_dataset_complete,
+};
 use triage::write_unresolved_identifier_triage;
 use upload::maybe_upload_outputs;
 
@@ -127,7 +131,6 @@ async fn main() -> Result<()> {
         .clone()
         .unwrap_or_else(|| raw_nppes_dir.join("weekly"));
     let mappings_dir = data_dir.join("mappings");
-    let reference_dir = data_dir.join("reference");
     let cache_dir = data_dir.join("cache");
     let output_dir = data_dir.join("output");
 
@@ -141,10 +144,6 @@ async fn main() -> Result<()> {
         .with_context(|| format!("Failed creating {}", mappings_dir.join("npi").display()))?;
     fs::create_dir_all(mappings_dir.join("hcpcs"))
         .with_context(|| format!("Failed creating {}", mappings_dir.join("hcpcs").display()))?;
-    fs::create_dir_all(reference_dir.join("npi"))
-        .with_context(|| format!("Failed creating {}", reference_dir.join("npi").display()))?;
-    fs::create_dir_all(reference_dir.join("hcpcs"))
-        .with_context(|| format!("Failed creating {}", reference_dir.join("hcpcs").display()))?;
     fs::create_dir_all(cache_dir.join("npi"))
         .with_context(|| format!("Failed creating {}", cache_dir.join("npi").display()))?;
     fs::create_dir_all(cache_dir.join("hcpcs"))
@@ -172,25 +171,19 @@ async fn main() -> Result<()> {
         .hcpcs_cache_db
         .clone()
         .unwrap_or_else(|| cache_dir.join("hcpcs").join("hcpcs_code_cache.sqlite"));
-    let npi_api_reference_parquet = args
-        .npi_api_reference_parquet
+    let npi_api_responses_parquet = args
+        .npi_api_responses_parquet
         .clone()
-        .unwrap_or_else(|| reference_dir.join("npi").join("npi_api_reference.parquet"));
-    let hcpcs_api_reference_parquet =
-        args.hcpcs_api_reference_parquet.clone().unwrap_or_else(|| {
-            reference_dir
-                .join("hcpcs")
-                .join("hcpcs_api_reference.parquet")
-        });
+        .unwrap_or_else(|| output_dir.join("npi.parquet"));
+    let hcpcs_api_responses_parquet = args
+        .hcpcs_api_responses_parquet
+        .clone()
+        .unwrap_or_else(|| output_dir.join("hcpcs.parquet"));
     let hcpcs_fallback_csv = args
         .hcpcs_fallback_csv
         .clone()
         .unwrap_or_else(|| raw_dir.join("cpt").join("cpt_hcpcs_fallback.csv"));
 
-    let output_path = args
-        .output_path
-        .clone()
-        .unwrap_or_else(|| default_enriched_output_path(&input_path, &output_dir));
     let unresolved_report_csv = args
         .unresolved_report_csv
         .clone()
@@ -198,7 +191,7 @@ async fn main() -> Result<()> {
     let api_run_id = new_api_run_id();
 
     let client = Client::builder()
-        .user_agent("medicaid-provider-spending-enricher/0.3")
+        .user_agent("medicaid-provider-spending-mappings/0.4")
         .build()
         .context("Failed creating HTTP client")?;
 
@@ -210,12 +203,70 @@ async fn main() -> Result<()> {
         delete_if_exists(&npi_cache_db)?;
         delete_if_exists(&hcpcs_mapping_csv)?;
         delete_if_exists(&hcpcs_cache_db)?;
-        delete_if_exists(&npi_api_reference_parquet)?;
-        delete_if_exists(&hcpcs_api_reference_parquet)?;
+        delete_if_exists(&npi_api_responses_parquet)?;
+        delete_if_exists(&hcpcs_api_responses_parquet)?;
+        // Backwards-compat cleanup: older runs wrote under data/reference/**.
+        let legacy_reference_dir = data_dir.join("reference");
+        delete_if_exists(
+            &legacy_reference_dir
+                .join("npi")
+                .join("npi_api_reference.parquet"),
+        )?;
+        delete_if_exists(
+            &legacy_reference_dir
+                .join("hcpcs")
+                .join("hcpcs_api_reference.parquet"),
+        )?;
         delete_if_exists(&unresolved_report_csv)?;
         println!(
-            "Reset mapping state (deleted NPI + HCPCS mappings, cache DBs, and API reference datasets)."
+            "Reset mapping state (deleted NPI + HCPCS mappings, cache DBs, and API response datasets)."
         );
+    }
+
+    if !args.reset_map {
+        // Migration path: older runs wrote append-only API request logs under data/reference/**.
+        // If present, import them into the new cache-backed, deduped API response tables so that
+        // `data/output/{npi,hcpcs}.parquet` can be generated without re-querying the APIs.
+        let legacy_reference_dir = data_dir.join("reference");
+        let legacy_npi_parquet = legacy_reference_dir
+            .join("npi")
+            .join("npi_api_reference.parquet");
+        if legacy_npi_parquet.exists() {
+            match backfill_npi_api_responses_from_legacy_parquet(&npi_cache_db, &legacy_npi_parquet)
+            {
+                Ok(imported) if imported > 0 => println!(
+                    "Imported {} NPI API response rows from legacy parquet {}",
+                    imported,
+                    legacy_npi_parquet.display()
+                ),
+                Ok(_) => {}
+                Err(err) => println!(
+                    "Warning: failed importing legacy NPI API response parquet {}: {err}",
+                    legacy_npi_parquet.display()
+                ),
+            }
+        }
+
+        let legacy_hcpcs_parquet = legacy_reference_dir
+            .join("hcpcs")
+            .join("hcpcs_api_reference.parquet");
+        if legacy_hcpcs_parquet.exists() {
+            match backfill_hcpcs_api_responses_from_legacy_parquet(
+                &hcpcs_cache_db,
+                &legacy_hcpcs_parquet,
+            ) {
+                Ok(imported) if imported > 0 => println!(
+                    "Imported {} HCPCS API response rows from legacy parquet {}",
+                    imported,
+                    legacy_hcpcs_parquet.display()
+                ),
+                Ok(_) => {}
+                Err(err) => println!(
+                    "Warning: failed importing legacy HCPCS API response parquet {}: {err}",
+                    legacy_hcpcs_parquet.display()
+                ),
+            }
+        }
     }
 
     if !input_path.exists() {
@@ -232,12 +283,7 @@ async fn main() -> Result<()> {
     let npi_dataset_done = if args.reset_map || args.rebuild_map {
         false
     } else {
-        is_npi_dataset_complete(
-            &input_path,
-            &npi_cache_db,
-            &npi_mapping_csv,
-            &npi_api_reference_parquet,
-        )?
+        is_npi_dataset_complete(&input_path, &npi_cache_db, &npi_mapping_csv)?
     };
     let hcpcs_dataset_done = if args.reset_map || args.rebuild_map {
         false
@@ -246,7 +292,6 @@ async fn main() -> Result<()> {
             &input_path,
             &hcpcs_cache_db,
             &hcpcs_mapping_csv,
-            &hcpcs_api_reference_parquet,
             &hcpcs_fallback_csv,
         )?
     };
@@ -265,7 +310,7 @@ async fn main() -> Result<()> {
                     &input_path,
                     &npi_cache_db,
                     &npi_mapping_csv,
-                    &npi_api_reference_parquet,
+                    &npi_api_responses_parquet,
                     &api_run_id,
                     Some(Arc::clone(&progress_hub)),
                     Arc::clone(&shutdown_requested),
@@ -278,7 +323,7 @@ async fn main() -> Result<()> {
                     &input_path,
                     &hcpcs_cache_db,
                     &hcpcs_mapping_csv,
-                    &hcpcs_api_reference_parquet,
+                    &hcpcs_api_responses_parquet,
                     &hcpcs_fallback_csv,
                     &api_run_id,
                     Some(Arc::clone(&progress_hub)),
@@ -294,7 +339,7 @@ async fn main() -> Result<()> {
                 &input_path,
                 &npi_cache_db,
                 &npi_mapping_csv,
-                &npi_api_reference_parquet,
+                &npi_api_responses_parquet,
                 &api_run_id,
                 None,
                 Arc::clone(&shutdown_requested),
@@ -303,16 +348,16 @@ async fn main() -> Result<()> {
             )
             .await?;
             println!(
-                "HCPCS dataset already built (mapping: {}, api reference: {}). Skipping HCPCS build (cache coverage is complete, including local fallback where applicable; pass --rebuild-map or --reset-map to rebuild).",
+                "HCPCS dataset already built (mapping: {}, api responses: {}). Skipping HCPCS build (cache coverage is complete, including local fallback where applicable; pass --rebuild-map or --reset-map to rebuild).",
                 hcpcs_mapping_csv.display(),
-                hcpcs_api_reference_parquet.display()
+                hcpcs_api_responses_parquet.display()
             );
         }
         (false, true) => {
             println!(
-                "NPI dataset already built (mapping: {}, api reference: {}). Skipping NPI build (pass --rebuild-map or --reset-map to rebuild).",
+                "NPI dataset already built (mapping: {}, api responses: {}). Skipping NPI build (pass --rebuild-map or --reset-map to rebuild).",
                 npi_mapping_csv.display(),
-                npi_api_reference_parquet.display()
+                npi_api_responses_parquet.display()
             );
             interrupted = build_hcpcs_mapping(
                 &args,
@@ -320,7 +365,7 @@ async fn main() -> Result<()> {
                 &input_path,
                 &hcpcs_cache_db,
                 &hcpcs_mapping_csv,
-                &hcpcs_api_reference_parquet,
+                &hcpcs_api_responses_parquet,
                 &hcpcs_fallback_csv,
                 &api_run_id,
                 None,
@@ -330,16 +375,31 @@ async fn main() -> Result<()> {
         }
         (false, false) => {
             println!(
-                "NPI dataset already built (mapping: {}, api reference: {}). Skipping NPI build (pass --rebuild-map or --reset-map to rebuild).",
+                "NPI dataset already built (mapping: {}, api responses: {}). Skipping NPI build (pass --rebuild-map or --reset-map to rebuild).",
                 npi_mapping_csv.display(),
-                npi_api_reference_parquet.display()
+                npi_api_responses_parquet.display()
             );
             println!(
-                "HCPCS dataset already built (mapping: {}, api reference: {}). Skipping HCPCS build (cache coverage is complete, including local fallback where applicable; pass --rebuild-map or --reset-map to rebuild).",
+                "HCPCS dataset already built (mapping: {}, api responses: {}). Skipping HCPCS build (cache coverage is complete, including local fallback where applicable; pass --rebuild-map or --reset-map to rebuild).",
                 hcpcs_mapping_csv.display(),
-                hcpcs_api_reference_parquet.display()
+                hcpcs_api_responses_parquet.display()
             );
         }
+    }
+
+    if !should_build_npi_map {
+        export_npi_api_responses_parquet(&npi_cache_db, &npi_api_responses_parquet)?;
+        println!(
+            "Wrote NPI API responses dataset {}",
+            npi_api_responses_parquet.display()
+        );
+    }
+    if !should_build_hcpcs_map {
+        export_hcpcs_api_responses_parquet(&hcpcs_cache_db, &hcpcs_api_responses_parquet)?;
+        println!(
+            "Wrote HCPCS API responses dataset {}",
+            hcpcs_api_responses_parquet.display()
+        );
     }
 
     if interrupted || shutdown_requested.load(Ordering::SeqCst) {
@@ -368,41 +428,16 @@ async fn main() -> Result<()> {
                 triage_dir.display()
             ),
         }
-        println!("Graceful shutdown complete. Progress saved; skipping enrichment and uploads.");
+        println!("Graceful shutdown complete. Progress saved; skipping uploads.");
         return Ok(());
-    }
-
-    let should_build_enriched = !args.build_map_only
-        && (args.reset_map
-            || args.rebuild_map
-            || !output_path.exists()
-            || should_build_npi_map
-            || should_build_hcpcs_map);
-
-    if should_build_enriched {
-        enrich_dataset(
-            &input_path,
-            &output_path,
-            &npi_mapping_csv,
-            &hcpcs_mapping_csv,
-        )?;
-        println!("Wrote enriched dataset {}", output_path.display());
-    } else if !args.build_map_only {
-        println!(
-            "Enriched dataset already exists at {} and source datasets were unchanged. Skipping enrichment (pass --rebuild-map or --reset-map to rebuild).",
-            output_path.display()
-        );
-    } else {
-        println!("--build-map-only set; skipping enrichment.");
     }
 
     maybe_upload_outputs(
         &args,
         &npi_mapping_csv,
         &hcpcs_mapping_csv,
-        &npi_api_reference_parquet,
-        &hcpcs_api_reference_parquet,
-        &output_path,
+        &npi_api_responses_parquet,
+        &hcpcs_api_responses_parquet,
     )?;
 
     write_unresolved_identifiers_report(

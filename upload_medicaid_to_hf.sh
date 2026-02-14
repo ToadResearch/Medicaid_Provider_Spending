@@ -8,12 +8,13 @@ Usage:
 
 Args:
   --token <HF_TOKEN>               Hugging Face token (or set HF_TOKEN)
-  --repo-id <repo-id>              Repo id (default: MedicaidProviderSpending)
+  --repo-id <repo-id>              Repo id (default: mkieffer/Medicaid-Provider-Spending)
   --repo-type <dataset|model>      Repo type (default: dataset)
-  --upload-split-dataset           Upload a 3-split dataset (provider + NPI/HCPCS reference)
-  --provider-file <local-path>     Provider main dataset parquet (default: enriched output if present)
-  --npi-reference-file <path>      NPI API reference parquet (default: data/reference/npi/npi_api_reference.parquet)
-  --hcpcs-reference-file <path>    HCPCS API reference parquet (default: data/reference/hcpcs/hcpcs_api_reference.parquet)
+  --upload-split-dataset           Upload a 3-split dataset (spending + NPI/HCPCS API responses)
+  --skip-spending-upload           In split mode, do not upload spending parquet (assumes it already exists in the HF repo)
+  --spending-file <local-path>     Spending dataset parquet (default: data/raw/medicaid/medicaid-provider-spending.parquet)
+  --npi-file <path>                NPI API responses parquet (default: data/output/npi.parquet)
+  --hcpcs-file <path>              HCPCS API responses parquet (default: data/output/hcpcs.parquet)
   --readme-file <path>             Dataset README to upload as hf://<repo>/README.md (default: hf/README.md)
   --path-in-repo <path>            Destination path in repo
   --file <local-path>              Upload a local file directly (skip download)
@@ -28,14 +29,15 @@ WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP_DIR="${HF_TMP_DIR:-${WORK_DIR}/tmp}"
 
 HF_TOKEN="${HF_TOKEN:-}"
-HF_REPO_ID="${HF_REPO_ID:-MedicaidProviderSpending}"
+HF_REPO_ID="${HF_REPO_ID:-mkieffer/Medicaid-Provider-Spending}"
 HF_REPO_TYPE="${HF_REPO_TYPE:-dataset}"
 HF_PATH_IN_REPO="${HF_PATH_IN_REPO:-medicaid-provider-spending.parquet}"
 LOCAL_FILE="${HF_LOCAL_FILE:-}"
 UPLOAD_SPLIT_DATASET=0
-PROVIDER_FILE=""
-NPI_REFERENCE_FILE=""
-HCPCS_REFERENCE_FILE=""
+SKIP_SPENDING_UPLOAD=0
+SPENDING_FILE=""
+NPI_FILE=""
+HCPCS_FILE=""
 README_FILE=""
 
 while [[ $# -gt 0 ]]; do
@@ -56,16 +58,20 @@ while [[ $# -gt 0 ]]; do
       UPLOAD_SPLIT_DATASET=1
       shift
       ;;
-    --provider-file)
-      PROVIDER_FILE="${2:-}"
+    --skip-spending-upload|--skip-provider-upload)
+      SKIP_SPENDING_UPLOAD=1
+      shift
+      ;;
+    --spending-file|--provider-file)
+      SPENDING_FILE="${2:-}"
       shift 2
       ;;
-    --npi-reference-file)
-      NPI_REFERENCE_FILE="${2:-}"
+    --npi-file|--npi-reference-file)
+      NPI_FILE="${2:-}"
       shift 2
       ;;
-    --hcpcs-reference-file)
-      HCPCS_REFERENCE_FILE="${2:-}"
+    --hcpcs-file|--hcpcs-reference-file)
+      HCPCS_FILE="${2:-}"
       shift 2
       ;;
     --readme-file)
@@ -120,7 +126,10 @@ mkdir -p "${TMP_DIR}"
 
 PYTHON_RUN=(python3)
 if ! python3 -c "import huggingface_hub" >/dev/null 2>&1; then
-  if command -v uv >/dev/null 2>&1; then
+  if command -v uvx >/dev/null 2>&1; then
+    # Use an ephemeral environment; no global install needed.
+    PYTHON_RUN=(uvx --from huggingface_hub python3)
+  elif command -v uv >/dev/null 2>&1; then
     # Use an ephemeral environment; no global install needed.
     PYTHON_RUN=(uv run --with huggingface_hub python3)
   else
@@ -131,30 +140,31 @@ if ! python3 -c "import huggingface_hub" >/dev/null 2>&1; then
 fi
 
 if [[ "${UPLOAD_SPLIT_DATASET}" -eq 1 ]]; then
-  # Default to the enriched provider dataset if present, otherwise fall back to raw input.
-  DEFAULT_PROVIDER_ENRICHED="${WORK_DIR}/data/output/medicaid-provider-spending-enriched.parquet"
-  DEFAULT_PROVIDER_RAW="${WORK_DIR}/data/raw/medicaid/medicaid-provider-spending.parquet"
-  if [[ -z "${PROVIDER_FILE}" ]]; then
-    if [[ -f "${DEFAULT_PROVIDER_ENRICHED}" ]]; then
-      PROVIDER_FILE="${DEFAULT_PROVIDER_ENRICHED}"
-    elif [[ -f "${DEFAULT_PROVIDER_RAW}" ]]; then
-      PROVIDER_FILE="${DEFAULT_PROVIDER_RAW}"
+  # Default to the raw spending parquet (as downloaded; unmodified).
+  DEFAULT_SPENDING_RAW="${WORK_DIR}/data/raw/medicaid/medicaid-provider-spending.parquet"
+  if [[ -z "${SPENDING_FILE}" ]]; then
+    if [[ -f "${DEFAULT_SPENDING_RAW}" ]]; then
+      SPENDING_FILE="${DEFAULT_SPENDING_RAW}"
     else
-      echo "Provider file not found. Pass --provider-file, or build the dataset first." >&2
+      echo "Spending file not found. Pass --spending-file, or build the dataset first." >&2
       exit 1
     fi
   fi
-  if [[ -z "${NPI_REFERENCE_FILE}" ]]; then
-    NPI_REFERENCE_FILE="${WORK_DIR}/data/reference/npi/npi_api_reference.parquet"
+  if [[ -z "${NPI_FILE}" ]]; then
+    NPI_FILE="${WORK_DIR}/data/output/npi.parquet"
   fi
-  if [[ -z "${HCPCS_REFERENCE_FILE}" ]]; then
-    HCPCS_REFERENCE_FILE="${WORK_DIR}/data/reference/hcpcs/hcpcs_api_reference.parquet"
+  if [[ -z "${HCPCS_FILE}" ]]; then
+    HCPCS_FILE="${WORK_DIR}/data/output/hcpcs.parquet"
   fi
   if [[ -z "${README_FILE}" ]]; then
     README_FILE="${WORK_DIR}/hf/README.md"
   fi
 
-  for f in "${PROVIDER_FILE}" "${NPI_REFERENCE_FILE}" "${HCPCS_REFERENCE_FILE}" "${README_FILE}"; do
+  required_files=("${NPI_FILE}" "${HCPCS_FILE}" "${README_FILE}")
+  if [[ "${SKIP_SPENDING_UPLOAD}" -eq 0 ]]; then
+    required_files+=("${SPENDING_FILE}")
+  fi
+  for f in "${required_files[@]}"; do
     if [[ ! -f "${f}" ]]; then
       echo "Required file not found: ${f}" >&2
       exit 1
@@ -162,7 +172,7 @@ if [[ "${UPLOAD_SPLIT_DATASET}" -eq 1 ]]; then
   done
 
   echo "Uploading split dataset to hf://${HF_REPO_ID} (${HF_REPO_TYPE})..."
-  export HF_TOKEN HF_REPO_ID HF_REPO_TYPE PROVIDER_FILE NPI_REFERENCE_FILE HCPCS_REFERENCE_FILE README_FILE
+  export HF_TOKEN HF_REPO_ID HF_REPO_TYPE SPENDING_FILE NPI_FILE HCPCS_FILE README_FILE SKIP_SPENDING_UPLOAD
 
   ${PYTHON_RUN[@]} - <<'PY'
 import os
@@ -183,10 +193,12 @@ api.create_repo(repo_id=repo_id, repo_type=repo_type, exist_ok=True)
 
 uploads = [
     (os.environ["README_FILE"], "README.md", "Upload dataset card (README.md)"),
-    (os.environ["PROVIDER_FILE"], "data/provider.parquet", "Upload provider split"),
-    (os.environ["NPI_REFERENCE_FILE"], "data/npi_api_reference.parquet", "Upload npi_api_reference split"),
-    (os.environ["HCPCS_REFERENCE_FILE"], "data/hcpcs_api_reference.parquet", "Upload hcpcs_api_reference split"),
+    (os.environ["NPI_FILE"], "data/npi.parquet", "Upload npi split"),
+    (os.environ["HCPCS_FILE"], "data/hcpcs.parquet", "Upload hcpcs split"),
 ]
+
+if os.environ.get("SKIP_SPENDING_UPLOAD", "0") != "1":
+    uploads.insert(1, (os.environ["SPENDING_FILE"], "data/spending.parquet", "Upload spending split"))
 
 for local_path, path_in_repo, msg in uploads:
     print(f"Uploading {local_path} -> hf://{repo_id}/{path_in_repo} ({repo_type})...")

@@ -1,0 +1,25 @@
+{
+  "name": "spending-explorer-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "svelte-kit sync && vite dev",
+    "build": "svelte-kit sync && vite build",
+    "preview": "vite preview",
+    "postinstall": "svelte-kit sync"
+  },
+  "dependencies": {
+    "maplibre-gl": "^4.7.1"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-auto": "^3.3.1",
+    "@sveltejs/kit": "^2.20.0",
+    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.3",
+    "svelte": "^5.23.1",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vite": "^5.4.14"
+  }
+}

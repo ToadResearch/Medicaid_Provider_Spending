@@ -1,0 +1,20 @@
+[package]
+name = "site-backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.95"
+axum = { version = "0.7.9", features = ["macros"] }
+clap = { version = "4.5.30", features = ["derive"] }
+duckdb = { version = "1.1.1", features = ["bundled"] }
+futures-util = "0.3.31"
+reqwest = { version = "0.12.12", default-features = false, features = ["rustls-tls", "stream"] }
+serde = { version = "1.0.218", features = ["derive"] }
+serde_json = "1.0.139"
+tantivy = "0.22.0"
+tokio = { version = "1.43.0", features = ["full"] }
+tower-http = { version = "0.6.2", features = ["cors"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+zip = "2.2.2"

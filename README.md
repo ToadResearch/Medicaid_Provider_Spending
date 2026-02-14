@@ -37,11 +37,9 @@ data/
   mappings/
     npi/npi_provider_mapping.csv
     hcpcs/hcpcs_code_mapping.csv
-  reference/
-    npi/npi_api_reference.parquet
-    hcpcs/hcpcs_api_reference.parquet
   output/
-    medicaid-provider-spending-enriched.parquet
+    npi.parquet
+    hcpcs.parquet
 ```
 
 ## 1) Download raw data files
@@ -74,11 +72,10 @@ Useful options:
 If `data/raw/cpt/` has no local CPT/HCPCS source data and no `--cpt-zip-url` is provided,
 `download.sh` auto-discovers a default CMS CPT archive URL from the configured `--cpt-index-url`.
 
-## 2) Build mapping files (resumable, cached)
+## 2) Build mapping + API-response datasets (resumable, cached)
 
 ```bash
-./build_datasets.sh \
-  --build-map-only
+./build_datasets.sh
 ```
 
 Default outputs:
@@ -86,8 +83,8 @@ Default outputs:
 - NPI lookup cache DB: `data/cache/npi/npi_provider_cache.sqlite`
 - HCPCS mapping CSV: `data/mappings/hcpcs/hcpcs_code_mapping.csv`
 - HCPCS lookup cache DB: `data/cache/hcpcs/hcpcs_code_cache.sqlite`
-- NPI API reference dataset: `data/reference/npi/npi_api_reference.parquet`
-- HCPCS API reference dataset: `data/reference/hcpcs/hcpcs_api_reference.parquet`
+- NPI API responses dataset: `data/output/npi.parquet`
+- HCPCS API responses dataset: `data/output/hcpcs.parquet`
 - Unresolved identifiers report: `data/unresolved_identifiers.csv`
 
 Behavior:
@@ -106,8 +103,8 @@ Behavior:
 - NPI + HCPCS map-building runs in parallel, with one live progress bar per API
 - progress bars include elapsed time, throughput, and ETA during API lookups
 - pressing Ctrl-C triggers a graceful stop: current in-flight work finishes, caches/maps are saved, then process exits
-- API reference datasets capture full API payloads for each request (plus URL/status/params)
-- reference dataset columns are ordered for readability: primary fields first, metadata/raw payload fields last
+- API response datasets capture full API payloads for each request (plus URL/params/errors) and are written as deduped one-row-per-identifier tables
+- API response dataset columns are ordered for readability: primary fields first, metadata/raw payload fields last
 - end-of-run unresolved report includes unresolved NPIs/HCPCS with status (`not_found`, `error`, `missing_cache`) and last fetch timestamp
 - override unresolved report path with `--unresolved-report-csv`
 
@@ -115,79 +112,39 @@ Optional log file output:
 
 ```bash
 ./build_datasets.sh \
-  --log-file ./logs/build_map.log \
-  --build-map-only
+  --log-file ./logs/build_map.log
 ```
 
 Note:
 - in an interactive terminal, `--log-file` preserves live progress bars while also writing logs
 
-## 3) Enrich dataset with mapped provider names
+## API response datasets
 
-```bash
-./build_datasets.sh
-```
+Two additional datasets are produced during map building (and are safe to re-export from the cache DB without re-querying the APIs):
 
-Adds two columns to each row:
-- `BILLING_PROVIDER`
-- `SERVICING_PROVIDER`
-
-Adds HCPCS enrichment columns:
-- `HCPCS_SHORT_DESC`
-- `HCPCS_LONG_DESC`
-- `HCPCS_ADD_DATE`
-- `HCPCS_ACT_EFF_DATE`
-- `HCPCS_TERM_DATE`
-- `HCPCS_OBSOLETE`
-- `HCPCS_IS_NOC`
-
-HCPCS temporal logic:
-- enrichment uses `CLAIM_FROM_MONTH` to select HCPCS metadata valid at the claim month
-- matching requires `claim_date >= COALESCE(act_eff_date, add_date)` and `claim_date <= term_date` when termination exists
-- if no temporally valid row exists, enrichment falls back to the best available record for that code
-
-NOC/non-NOC selection policy:
-- HCPCS `is_noc=true` means “Not Otherwise Classified” (catch-all entries)
-- when code metadata is ambiguous, the pipeline prefers non-NOC rows (`is_noc=false`) because they are more specific to the billed service
-- if only NOC rows are available for a code/date, the pipeline uses NOC so coverage is not lost
-
-Default output:
-- `data/output/medicaid-provider-spending-enriched.parquet`
-- if this output already exists and mapping/reference datasets are unchanged, enrichment is skipped unless `--rebuild-map` or `--reset-map` is used
-
-Unresolved code handling:
-- unresolved NPI/HCPCS identifiers remain in the source columns and enrichment fields stay null when no match is available
-- unresolved identifiers are always exported to `data/unresolved_identifiers.csv` at the end of the run for follow-up
-- the enriched dataset keeps all source rows (including unresolved rows with null enrichment fields), and that same enriched file is what `--hf-upload-enriched` uploads to Hugging Face
-
-## API reference datasets
-
-Two additional datasets are produced during map building:
-
-- `data/reference/npi/npi_api_reference.parquet`
-  - one row per NPI API request
-  - includes nested response structures as JSON-string columns (`addresses_json`, `taxonomies_json`, etc.)
-  - includes `request_url` and full payload in `response_json_raw`
+- `data/output/npi.parquet`
+  - one row per NPI API lookup (deduped)
+  - includes nested response structures as JSON-string columns (`addresses`, `taxonomies`, etc.)
+  - includes `url` and full payload in `response_json`
   - column order:
     - `npi`
-    - `basic_json`, `addresses_json`, `practice_locations_json`, `taxonomies_json`, `identifiers_json`, `other_names_json`, `endpoints_json`
-    - `result_count`, `request_url`, `http_status`, `error_message`, `api_run_id`, `requested_at_utc`, `request_params_json`, `results_json`, `response_json_raw`
+    - `basic`, `addresses`, `practice_locations`, `taxonomies`, `identifiers`, `other_names`, `endpoints`
+    - `url`, `error_message`, `api_run_id`, `requested_at_utc`, `request_params`, `results`, `response_json`
 
-- `data/reference/hcpcs/hcpcs_api_reference.parquet`
-  - one row per HCPCS API request
-  - includes columns derived from `response_json` plus `request_url`
-  - includes full payload in `response_json_raw`
+- `data/output/hcpcs.parquet`
+  - one row per HCPCS API lookup (deduped)
+  - includes columns derived from `response_json` plus `url`
+  - includes full payload in `response_json`
   - column order:
     - `hcpcs_code`
-    - `ef_short_desc_json`, `ef_long_desc_json`, `ef_add_dt_json`, `ef_act_eff_dt_json`, `ef_term_dt_json`, `ef_obsolete_json`, `ef_is_noc_json`
-    - `response_total_count`, `response_codes_json`, `response_display_json`, `response_extra_fields_json`
-    - `request_url`, `http_status`, `error_message`, `api_run_id`, `requested_at_utc`, `request_params_json`, `response_json_raw`
+    - `ef_short_desc`, `ef_long_desc`, `ef_add_dt`, `ef_act_eff_dt`, `ef_term_dt`, `ef_obsolete`, `ef_is_noc`
+    - `response_codes`, `response_display`, `response_extra_fields`
+    - `url`, `error_message`, `api_run_id`, `requested_at_utc`, `request_params`, `response_json`
 
 Note:
-- if `--skip-api` is set, these reference datasets are written with schema but no request rows
-- if mapping build is skipped because dataset outputs already exist, reference datasets are not rebuilt
+- if `--skip-api` is set, these response datasets will not gain new rows (existing cached rows are still exported)
 
-## 4) One-command download + Rust pipeline
+## 3) One-command download + Rust pipeline
 
 ```bash
 ./download.sh --run-rust
@@ -203,7 +160,7 @@ Forward extra args to Rust after `--`:
   --hcpcs-batch-size 100
 ```
 
-## 5) Optional Hugging Face upload
+## 4) Optional Hugging Face upload
 
 Upload is opt-in in Rust and only happens when upload flags are provided:
 
@@ -213,14 +170,13 @@ Upload is opt-in in Rust and only happens when upload flags are provided:
   --hf-repo-id "mkieffer/Medicaid-Provider-Spending" \
   --hf-upload-mapping \
   --hf-upload-hcpcs-mapping \
-  --hf-upload-npi-reference \
-  --hf-upload-hcpcs-reference \
-  --hf-upload-enriched
+  --hf-upload-npi \
+  --hf-upload-hcpcs
 ```
 
-Optional destination overrides for reference datasets:
-- `--hf-npi-reference-path-in-repo`
-- `--hf-hcpcs-reference-path-in-repo`
+Optional destination overrides for API response datasets:
+- `--hf-npi-path-in-repo`
+- `--hf-hcpcs-path-in-repo`
 
 You can still use the standalone upload helper:
 
@@ -228,7 +184,8 @@ You can still use the standalone upload helper:
 ./upload_medicaid_to_hf.sh \
   --token "hf_..." \
   --repo-id "mkieffer/Medicaid-Provider-Spending" \
-  --file "./data/output/medicaid-provider-spending-enriched.parquet"
+  --file "./data/raw/medicaid/medicaid-provider-spending.parquet" \
+  --path-in-repo "data/spending.parquet"
 ```
 
 Or with the split dataset upload mode:
@@ -240,11 +197,33 @@ Or with the split dataset upload mode:
   --upload-split-dataset
 ```
 
+To update just the API response splits + dataset card without re-uploading the large spending parquet:
+
+```bash
+./upload_medicaid_to_hf.sh \
+  --token "hf_..." \
+  --repo-id "mkieffer/Medicaid-Provider-Spending" \
+  --upload-split-dataset \
+  --skip-spending-upload
+```
+
+Split usage:
+
+```python
+from datasets import load_dataset
+
+ds = load_dataset("mkieffer/Medicaid-Provider-Spending")
+
+spending = ds["spending"]
+npi = ds["npi"]
+hcpcs = ds["hcpcs"]
+```
+
 Dataset URL:
 
 - https://huggingface.co/datasets/mkieffer/Medicaid-Provider-Spending
 
-## API references (rate-limit guidance)
+## API docs (rate-limit guidance)
 
 - NPPES registry homepage notice about hourly query limits:
   - `https://npiregistry.cms.hhs.gov/`

@@ -7,15 +7,13 @@ pub fn maybe_upload_outputs(
     args: &Args,
     npi_mapping_csv: &Path,
     hcpcs_mapping_csv: &Path,
-    npi_api_reference_parquet: &Path,
-    hcpcs_api_reference_parquet: &Path,
-    output_path: &Path,
+    npi_api_responses_parquet: &Path,
+    hcpcs_api_responses_parquet: &Path,
 ) -> Result<()> {
     if !args.hf_upload_mapping
         && !args.hf_upload_hcpcs_mapping
-        && !args.hf_upload_npi_reference
-        && !args.hf_upload_hcpcs_reference
-        && !args.hf_upload_enriched
+        && !args.hf_upload_npi
+        && !args.hf_upload_hcpcs
     {
         return Ok(());
     }
@@ -69,19 +67,19 @@ pub fn maybe_upload_outputs(
         )?;
     }
 
-    if args.hf_upload_npi_reference {
-        if !npi_api_reference_parquet.exists() {
+    if args.hf_upload_npi {
+        if !npi_api_responses_parquet.exists() {
             bail!(
-                "NPI API reference upload requested but file does not exist: {}",
-                npi_api_reference_parquet.display()
+                "NPI API responses upload requested but file does not exist: {}",
+                npi_api_responses_parquet.display()
             );
         }
         let path_in_repo = args
-            .hf_npi_reference_path_in_repo
+            .hf_npi_path_in_repo
             .clone()
-            .unwrap_or(file_name_for_repo(npi_api_reference_parquet)?);
+            .unwrap_or(file_name_for_repo(npi_api_responses_parquet)?);
         upload_file_to_hf(
-            npi_api_reference_parquet,
+            npi_api_responses_parquet,
             &path_in_repo,
             repo_id,
             &args.hf_repo_type,
@@ -89,39 +87,19 @@ pub fn maybe_upload_outputs(
         )?;
     }
 
-    if args.hf_upload_hcpcs_reference {
-        if !hcpcs_api_reference_parquet.exists() {
+    if args.hf_upload_hcpcs {
+        if !hcpcs_api_responses_parquet.exists() {
             bail!(
-                "HCPCS API reference upload requested but file does not exist: {}",
-                hcpcs_api_reference_parquet.display()
+                "HCPCS API responses upload requested but file does not exist: {}",
+                hcpcs_api_responses_parquet.display()
             );
         }
         let path_in_repo = args
-            .hf_hcpcs_reference_path_in_repo
+            .hf_hcpcs_path_in_repo
             .clone()
-            .unwrap_or(file_name_for_repo(hcpcs_api_reference_parquet)?);
+            .unwrap_or(file_name_for_repo(hcpcs_api_responses_parquet)?);
         upload_file_to_hf(
-            hcpcs_api_reference_parquet,
-            &path_in_repo,
-            repo_id,
-            &args.hf_repo_type,
-            token,
-        )?;
-    }
-
-    if args.hf_upload_enriched {
-        if !output_path.exists() {
-            bail!(
-                "Enriched upload requested but output file does not exist: {}",
-                output_path.display()
-            );
-        }
-        let path_in_repo = args
-            .hf_enriched_path_in_repo
-            .clone()
-            .unwrap_or(file_name_for_repo(output_path)?);
-        upload_file_to_hf(
-            output_path,
+            hcpcs_api_responses_parquet,
             &path_in_repo,
             repo_id,
             &args.hf_repo_type,
