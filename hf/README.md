@@ -12,6 +12,7 @@ tags:
 - hcpcs
 configs:
 - config_name: spending
+  default: true
   data_files:
   - split: spending
     path: data/spending.parquet
@@ -42,11 +43,14 @@ This dataset packages:
 
 ## Data Splits
 
+These are exposed on Hugging Face as **three dataset configurations** (`spending`, `npi`, `hcpcs`)
+because each has a different schema (the Hub viewer and `datasets` expect a consistent schema within a single config).
+
 | split | contents |
 | --- | --- |
 | `spending` | Raw Medicaid Provider Spending parquet (as downloaded; unmodified) from [HHS Open Data](https://opendata.hhs.gov/datasets/medicaid-provider-spending/). |
-| `npi` | **Derived** NPI resolution artifacts: one row per *unique NPI that was looked up via the CMS NPI Registry API* (deduped). Includes request URL/params, error message, and raw JSON payload. (Many NPIs are resolved from bulk NPPES files instead; those successful bulk matches will not necessarily appear in this API-response split.) |
-| `hcpcs` | **Derived** HCPCS/CPT resolution artifacts: one row per *unique code that was looked up via the Clinical Tables HCPCS API* (deduped). Includes request URL/params, error message, and raw JSON payload. (Some codes may be resolved from local CPT/HCPCS fallback data instead; those successful fallback matches will not necessarily appear in this API-response split.) |
+| `npi` | **Derived** NPI resolution artifacts: one row per *unique NPI in the spending dataset* (deduped). Populated primarily from bulk NPPES dissemination files; the CMS NPI Registry API is used only as fallback for bulk misses. Includes provenance (URL/params), error message, and a raw-or-synthetic JSON payload matching the NPI Registry API response shape. |
+| `hcpcs` | **Derived** HCPCS/CPT resolution artifacts: one row per *unique code in the spending dataset* (deduped). Populated from the resolved mapping cache (Clinical Tables API and/or local CPT/HCPCS fallback). Includes provenance (URL/params), error message, and a raw-or-synthetic JSON payload matching the Clinical Tables response shape. |
 
 
 ## Usage
@@ -54,11 +58,9 @@ This dataset packages:
 ```python
 from datasets import load_dataset
 
-ds = load_dataset("mkieffer/Medicaid-Provider-Spending")
-
-spending = ds["spending"]
-npi = ds["npi"]
-hcpcs = ds["hcpcs"]
+spending = load_dataset("mkieffer/Medicaid-Provider-Spending", "spending")["spending"]
+npi = load_dataset("mkieffer/Medicaid-Provider-Spending", "npi")["npi"]
+hcpcs = load_dataset("mkieffer/Medicaid-Provider-Spending", "hcpcs")["hcpcs"]
 ```
 
 ## Split Schemas
@@ -81,7 +83,7 @@ All columns in this split are `string` (some are JSON-encoded strings).
 
 | column | type | description |
 | --- | --- | --- |
-| `npi` | string | NPI looked up |
+| `npi` | string | NPI |
 | `basic` | string (JSON) | `results[0].basic` |
 | `addresses` | string (JSON) | `results[0].addresses` |
 | `practice_locations` | string (JSON) | `results[0].practiceLocations` |
@@ -89,13 +91,13 @@ All columns in this split are `string` (some are JSON-encoded strings).
 | `identifiers` | string (JSON) | `results[0].identifiers` |
 | `other_names` | string (JSON) | `results[0].other_names` |
 | `endpoints` | string (JSON) | `results[0].endpoints` |
-| `url` | string | Request URL |
+| `url` | string | Request URL when an API call happened; otherwise a bulk sentinel like `nppes_bulk:*` |
 | `error_message` | string (nullable) | Error message if lookup failed |
 | `api_run_id` | string | Local pipeline run id |
-| `requested_at_utc` | string | Request timestamp (UTC) |
-| `request_params` | string (JSON) | Request params captured by the pipeline |
+| `requested_at_utc` | string | Request timestamp (UTC) or bulk-export generation timestamp |
+| `request_params` | string (JSON) | Request params / provenance captured by the pipeline |
 | `results` | string (JSON) | Full `results` array |
-| `response_json` | string (JSON) | Full raw API JSON payload |
+| `response_json` | string (JSON) | Full raw API JSON payload when an API call happened; otherwise a synthetic payload in the same shape |
 
 ### `hcpcs`
 
@@ -103,7 +105,7 @@ All columns in this split are `string` (some are JSON-encoded strings).
 
 | column | type | description |
 | --- | --- | --- |
-| `hcpcs_code` | string | HCPCS/CPT code looked up |
+| `hcpcs_code` | string | HCPCS/CPT code |
 | `ef_short_desc` | string (JSON) | `extra_fields.short_desc` (list) |
 | `ef_long_desc` | string (JSON) | `extra_fields.long_desc` (list) |
 | `ef_add_dt` | string (JSON) | `extra_fields.add_dt` (list) |
@@ -114,13 +116,69 @@ All columns in this split are `string` (some are JSON-encoded strings).
 | `response_codes` | string (JSON) | Codes array returned by the API |
 | `response_display` | string (JSON) | Display array returned by the API |
 | `response_extra_fields` | string (JSON) | Extra fields object returned by the API |
-| `url` | string | Request URL |
+| `url` | string | Request URL when an API call happened; otherwise a cache/fallback sentinel like `hcpcs_cache:*` |
 | `error_message` | string (nullable) | Error message if lookup failed |
 | `api_run_id` | string | Local pipeline run id |
-| `requested_at_utc` | string | Request timestamp (UTC) |
-| `request_params` | string (JSON) | Request params captured by the pipeline |
-| `response_json` | string (JSON) | Full raw API JSON payload |
+| `requested_at_utc` | string | Request timestamp (UTC) or cache-export generation timestamp |
+| `request_params` | string (JSON) | Request params / provenance captured by the pipeline |
+| `response_json` | string (JSON) | Full raw API JSON payload when an API call happened; otherwise a synthetic payload in the same shape |
 
+
+## Parquet Null / Empty-List Audit
+
+<!-- BEGIN PARQUET_NULL_AUDIT -->
+_Auto-generated by `./build_datasets.sh` (or `cargo run --release --manifest-path build_datasets/Cargo.toml -- --null-check`)._
+
+- Generated at (unix seconds): 1771173117
+- NPI parquet: `data/output/npi.parquet`
+- HCPCS parquet: `data/output/hcpcs.parquet`
+
+Notes:
+- `null_count` counts actual Parquet nulls.
+- `empty_list_count` counts the literal string value `"[]"` (JSON-encoded empty list).
+
+### NPI (`data/output/npi.parquet`)
+
+| column | rows_total | null_count | null_pct | empty_list_count | empty_list_pct |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| error_message | 1802136 | 1799569 | 99.86% | 0 | 0.00% |
+| other_names | 1802136 | 4176 | 0.23% | 1657485 | 91.97% |
+| endpoints | 1802136 | 4176 | 0.23% | 1591727 | 88.32% |
+| practice_locations | 1802136 | 4176 | 0.23% | 1480277 | 82.14% |
+| identifiers | 1802136 | 4176 | 0.23% | 1208848 | 67.08% |
+| addresses | 1802136 | 4176 | 0.23% | 20097 | 1.12% |
+| taxonomies | 1802136 | 4176 | 0.23% | 20097 | 1.12% |
+| basic | 1802136 | 4176 | 0.23% | 0 | 0.00% |
+| results | 1802136 | 4065 | 0.23% | 111 | 0.01% |
+| response_json | 1802136 | 2567 | 0.14% | 0 | 0.00% |
+| api_run_id | 1802136 | 0 | 0.00% | 0 | 0.00% |
+| npi | 1802136 | 0 | 0.00% | 0 | 0.00% |
+| request_params | 1802136 | 0 | 0.00% | 0 | 0.00% |
+| requested_at_utc | 1802136 | 0 | 0.00% | 0 | 0.00% |
+| url | 1802136 | 0 | 0.00% | 0 | 0.00% |
+
+### HCPCS (`data/output/hcpcs.parquet`)
+
+| column | rows_total | null_count | null_pct | empty_list_count | empty_list_pct |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| error_message | 10881 | 6271 | 57.63% | 0 | 0.00% |
+| ef_act_eff_dt | 10881 | 0 | 0.00% | 4610 | 42.37% |
+| ef_add_dt | 10881 | 0 | 0.00% | 4610 | 42.37% |
+| ef_is_noc | 10881 | 0 | 0.00% | 4610 | 42.37% |
+| ef_long_desc | 10881 | 0 | 0.00% | 4610 | 42.37% |
+| ef_obsolete | 10881 | 0 | 0.00% | 4610 | 42.37% |
+| ef_short_desc | 10881 | 0 | 0.00% | 4610 | 42.37% |
+| ef_term_dt | 10881 | 0 | 0.00% | 4610 | 42.37% |
+| response_codes | 10881 | 0 | 0.00% | 4610 | 42.37% |
+| response_display | 10881 | 0 | 0.00% | 4610 | 42.37% |
+| api_run_id | 10881 | 0 | 0.00% | 0 | 0.00% |
+| hcpcs_code | 10881 | 0 | 0.00% | 0 | 0.00% |
+| request_params | 10881 | 0 | 0.00% | 0 | 0.00% |
+| requested_at_utc | 10881 | 0 | 0.00% | 0 | 0.00% |
+| response_extra_fields | 10881 | 0 | 0.00% | 0 | 0.00% |
+| response_json | 10881 | 0 | 0.00% | 0 | 0.00% |
+| url | 10881 | 0 | 0.00% | 0 | 0.00% |
+<!-- END PARQUET_NULL_AUDIT -->
 
 ## Unmapped / Unresolved Identifier Counts
 

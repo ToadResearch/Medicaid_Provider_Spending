@@ -70,7 +70,7 @@ pub fn maybe_upload_outputs(
     if args.hf_upload_npi {
         if !npi_api_responses_parquet.exists() {
             bail!(
-                "NPI API responses upload requested but file does not exist: {}",
+                "NPI resolved identifier parquet upload requested but file does not exist: {}",
                 npi_api_responses_parquet.display()
             );
         }
@@ -90,7 +90,7 @@ pub fn maybe_upload_outputs(
     if args.hf_upload_hcpcs {
         if !hcpcs_api_responses_parquet.exists() {
             bail!(
-                "HCPCS API responses upload requested but file does not exist: {}",
+                "HCPCS resolved identifier parquet upload requested but file does not exist: {}",
                 hcpcs_api_responses_parquet.display()
             );
         }

@@ -3,6 +3,8 @@ mod common;
 mod constants;
 mod hcpcs;
 mod npi;
+mod null_audit;
+mod parquet_writer;
 mod triage;
 mod upload;
 
@@ -33,6 +35,7 @@ use npi::{
     backfill_npi_api_responses_from_legacy_parquet, build_npi_mapping, collect_unresolved_npis,
     export_npi_api_responses_parquet, is_npi_dataset_complete,
 };
+use null_audit::generate_and_update_hf_docs;
 use triage::write_unresolved_identifier_triage;
 use upload::maybe_upload_outputs;
 
@@ -189,6 +192,11 @@ async fn main() -> Result<()> {
         .clone()
         .unwrap_or_else(|| data_dir.join("unresolved_identifiers.csv"));
     let api_run_id = new_api_run_id();
+
+    if args.null_check {
+        generate_and_update_hf_docs(&npi_api_responses_parquet, &hcpcs_api_responses_parquet)?;
+        return Ok(());
+    }
 
     let client = Client::builder()
         .user_agent("medicaid-provider-spending-mappings/0.4")
@@ -348,14 +356,14 @@ async fn main() -> Result<()> {
             )
             .await?;
             println!(
-                "HCPCS dataset already built (mapping: {}, api responses: {}). Skipping HCPCS build (cache coverage is complete, including local fallback where applicable; pass --rebuild-map or --reset-map to rebuild).",
+                "HCPCS dataset already built (mapping: {}, resolved dataset: {}). Skipping HCPCS build (cache coverage is complete, including local fallback where applicable; pass --rebuild-map or --reset-map to rebuild).",
                 hcpcs_mapping_csv.display(),
                 hcpcs_api_responses_parquet.display()
             );
         }
         (false, true) => {
             println!(
-                "NPI dataset already built (mapping: {}, api responses: {}). Skipping NPI build (pass --rebuild-map or --reset-map to rebuild).",
+                "NPI dataset already built (mapping: {}, resolved dataset: {}). Skipping NPI build (pass --rebuild-map or --reset-map to rebuild).",
                 npi_mapping_csv.display(),
                 npi_api_responses_parquet.display()
             );
@@ -375,31 +383,37 @@ async fn main() -> Result<()> {
         }
         (false, false) => {
             println!(
-                "NPI dataset already built (mapping: {}, api responses: {}). Skipping NPI build (pass --rebuild-map or --reset-map to rebuild).",
+                "NPI dataset already built (mapping: {}, resolved dataset: {}). Skipping NPI build (pass --rebuild-map or --reset-map to rebuild).",
                 npi_mapping_csv.display(),
                 npi_api_responses_parquet.display()
             );
             println!(
-                "HCPCS dataset already built (mapping: {}, api responses: {}). Skipping HCPCS build (cache coverage is complete, including local fallback where applicable; pass --rebuild-map or --reset-map to rebuild).",
+                "HCPCS dataset already built (mapping: {}, resolved dataset: {}). Skipping HCPCS build (cache coverage is complete, including local fallback where applicable; pass --rebuild-map or --reset-map to rebuild).",
                 hcpcs_mapping_csv.display(),
                 hcpcs_api_responses_parquet.display()
             );
         }
     }
 
-    if !should_build_npi_map {
-        export_npi_api_responses_parquet(&npi_cache_db, &npi_api_responses_parquet)?;
-        println!(
-            "Wrote NPI API responses dataset {}",
-            npi_api_responses_parquet.display()
-        );
+    if !should_build_npi_map && !npi_api_responses_parquet.exists() {
+        export_npi_api_responses_parquet(
+            &input_path,
+            &npi_cache_db,
+            &npi_api_responses_parquet,
+            &api_run_id,
+            &shutdown_requested,
+            &nppes_monthly_dir,
+            &nppes_weekly_dir,
+            args.skip_nppes_bulk,
+        )?;
     }
-    if !should_build_hcpcs_map {
-        export_hcpcs_api_responses_parquet(&hcpcs_cache_db, &hcpcs_api_responses_parquet)?;
-        println!(
-            "Wrote HCPCS API responses dataset {}",
-            hcpcs_api_responses_parquet.display()
-        );
+    if !should_build_hcpcs_map && !hcpcs_api_responses_parquet.exists() {
+        export_hcpcs_api_responses_parquet(
+            &hcpcs_cache_db,
+            &hcpcs_api_responses_parquet,
+            &hcpcs_fallback_csv,
+            &api_run_id,
+        )?;
     }
 
     if interrupted || shutdown_requested.load(Ordering::SeqCst) {

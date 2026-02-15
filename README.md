@@ -72,7 +72,7 @@ Useful options:
 If `data/raw/cpt/` has no local CPT/HCPCS source data and no `--cpt-zip-url` is provided,
 `download.sh` auto-discovers a default CMS CPT archive URL from the configured `--cpt-index-url`.
 
-## 2) Build mapping + API-response datasets (resumable, cached)
+## 2) Build mappings + resolved identifier datasets (resumable, cached)
 
 ```bash
 ./build_datasets.sh
@@ -83,8 +83,8 @@ Default outputs:
 - NPI lookup cache DB: `data/cache/npi/npi_provider_cache.sqlite`
 - HCPCS mapping CSV: `data/mappings/hcpcs/hcpcs_code_mapping.csv`
 - HCPCS lookup cache DB: `data/cache/hcpcs/hcpcs_code_cache.sqlite`
-- NPI API responses dataset: `data/output/npi.parquet`
-- HCPCS API responses dataset: `data/output/hcpcs.parquet`
+- NPI resolved identifier dataset (bulk+API): `data/output/npi.parquet`
+- HCPCS resolved identifier dataset (cache+fallback+API): `data/output/hcpcs.parquet`
 - Unresolved identifiers report: `data/unresolved_identifiers.csv`
 
 Behavior:
@@ -103,8 +103,8 @@ Behavior:
 - NPI + HCPCS map-building runs in parallel, with one live progress bar per API
 - progress bars include elapsed time, throughput, and ETA during API lookups
 - pressing Ctrl-C triggers a graceful stop: current in-flight work finishes, caches/maps are saved, then process exits
-- API response datasets capture full API payloads for each request (plus URL/params/errors) and are written as deduped one-row-per-identifier tables
-- API response dataset columns are ordered for readability: primary fields first, metadata/raw payload fields last
+- resolved identifier datasets capture full API payloads when requests occurred, otherwise a synthetic payload derived from bulk/fallback sources (plus URL/params/errors) and are written as deduped one-row-per-identifier tables
+- resolved identifier dataset columns are ordered for readability: primary fields first, metadata/raw payload fields last
 - end-of-run unresolved report includes unresolved NPIs/HCPCS with status (`not_found`, `error`, `missing_cache`) and last fetch timestamp
 - override unresolved report path with `--unresolved-report-csv`
 
@@ -188,7 +188,7 @@ You can still use the standalone upload helper:
   --path-in-repo "data/spending.parquet"
 ```
 
-Or with the split dataset upload mode:
+Or with the split/config dataset upload mode:
 
 ```bash
 ./upload_medicaid_to_hf.sh \
@@ -207,16 +207,14 @@ To update just the API response splits + dataset card without re-uploading the l
   --skip-spending-upload
 ```
 
-Split usage:
+Hugging Face config usage:
 
 ```python
 from datasets import load_dataset
 
-ds = load_dataset("mkieffer/Medicaid-Provider-Spending")
-
-spending = ds["spending"]
-npi = ds["npi"]
-hcpcs = ds["hcpcs"]
+spending = load_dataset("mkieffer/Medicaid-Provider-Spending", "spending")["spending"]
+npi = load_dataset("mkieffer/Medicaid-Provider-Spending", "npi")["npi"]
+hcpcs = load_dataset("mkieffer/Medicaid-Provider-Spending", "hcpcs")["hcpcs"]
 ```
 
 Dataset URL:

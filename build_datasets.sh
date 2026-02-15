@@ -78,3 +78,24 @@ if [[ -n "${LOG_FILE}" ]]; then
 else
   "${CMD[@]}"
 fi
+
+# Auto-generate hf/parquet_null_audit.md + update hf/README.md at the end of a normal run.
+# Skip if the user explicitly requested --null-check (one-off mode) or asked for help/version output.
+if [[ " ${RUST_ARGS[*]:-} " != *" --null-check "* && " ${RUST_ARGS[*]:-} " != *" --help "* && " ${RUST_ARGS[*]:-} " != *" -h "* && " ${RUST_ARGS[*]:-} " != *" --version "* ]]; then
+  NULL_CMD=(cargo run --release --manifest-path "${MANIFEST_PATH}" --)
+  if [[ ${#RUST_ARGS[@]} -gt 0 ]]; then
+    NULL_CMD+=("${RUST_ARGS[@]}")
+  fi
+  NULL_CMD+=(--null-check)
+
+  if [[ -n "${LOG_FILE}" ]]; then
+    if [[ -t 1 && -t 2 ]] && command -v script >/dev/null 2>&1; then
+      # Always append for the second phase so we don't clobber the main run logs.
+      script -q -e -a "${LOG_FILE}" "${NULL_CMD[@]}"
+    else
+      "${NULL_CMD[@]}" 2>&1 | tee -a "${LOG_FILE}"
+    fi
+  else
+    "${NULL_CMD[@]}"
+  fi
+fi

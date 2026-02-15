@@ -33,8 +33,8 @@ This will download (if missing):
 If present locally, it will prefer reusing:
 
 - `data/raw/medicaid/medicaid-provider-spending.parquet` (spending)
-- `data/output/npi.parquet` (NPI API responses)
-- `data/output/hcpcs.parquet` (HCPCS API responses)
+- `data/output/npi.parquet` (resolved NPI identifiers: bulk+API)
+- `data/output/hcpcs.parquet` (resolved HCPCS identifiers: cache+fallback+API)
 
 Outputs are written under `site/backend/data/`:
 

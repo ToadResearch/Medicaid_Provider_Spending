@@ -138,10 +138,17 @@ pub fn extract_provider_fields(npi: &str, response_json: Option<&str>) -> NpiExt
                 .get("code")
                 .and_then(|x| x.as_str())
                 .map(|s| s.to_string());
-            out.primary_taxonomy_desc = t
+            let desc = t
                 .get("desc")
                 .and_then(|x| x.as_str())
-                .map(|s| s.to_string());
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let group = t
+                .get("taxonomy_group")
+                .and_then(|x| x.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            out.primary_taxonomy_desc = desc.or(group).map(|s| s.to_string());
         }
     }
 

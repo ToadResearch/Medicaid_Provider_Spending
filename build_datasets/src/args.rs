@@ -34,11 +34,17 @@ pub struct Args {
     #[arg(long)]
     pub hcpcs_cache_db: Option<std::path::PathBuf>,
 
-    /// NPI API responses dataset output path (.parquet).
+    /// Resolved NPI identifier dataset output path (.parquet).
+    ///
+    /// One row per NPI in the source spending dataset, populated from local NPPES bulk files
+    /// when available and from cached NPI Registry API responses for bulk misses.
     #[arg(long)]
     pub npi_api_responses_parquet: Option<std::path::PathBuf>,
 
-    /// HCPCS API responses dataset output path (.parquet).
+    /// Resolved HCPCS identifier dataset output path (.parquet).
+    ///
+    /// One row per HCPCS code in the source spending dataset, populated from the resolved
+    /// mapping cache (API-derived and/or local CPT fallback).
     #[arg(long)]
     pub hcpcs_api_responses_parquet: Option<std::path::PathBuf>,
 
@@ -151,11 +157,11 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub hf_upload_hcpcs_mapping: bool,
 
-    /// Upload NPI API responses parquet to Hugging Face (requires hf_token + hf_repo_id).
+    /// Upload resolved NPI identifier parquet to Hugging Face (requires hf_token + hf_repo_id).
     #[arg(long, default_value_t = false)]
     pub hf_upload_npi: bool,
 
-    /// Upload HCPCS API responses parquet to Hugging Face (requires hf_token + hf_repo_id).
+    /// Upload resolved HCPCS identifier parquet to Hugging Face (requires hf_token + hf_repo_id).
     #[arg(long, default_value_t = false)]
     pub hf_upload_hcpcs: bool,
 
@@ -167,11 +173,16 @@ pub struct Args {
     #[arg(long)]
     pub hf_hcpcs_mapping_path_in_repo: Option<String>,
 
-    /// Destination path for NPI API responses parquet in Hugging Face repo.
+    /// Destination path for resolved NPI identifier parquet in Hugging Face repo.
     #[arg(long)]
     pub hf_npi_path_in_repo: Option<String>,
 
-    /// Destination path for HCPCS API responses parquet in Hugging Face repo.
+    /// Destination path for resolved HCPCS identifier parquet in Hugging Face repo.
     #[arg(long)]
     pub hf_hcpcs_path_in_repo: Option<String>,
+
+    /// Generate `hf/parquet_null_audit.md` + update `hf/README.md` with null/empty-list stats
+    /// for the resolved identifier Parquet outputs, then exit.
+    #[arg(long, default_value_t = false)]
+    pub null_check: bool,
 }
