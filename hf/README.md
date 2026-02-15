@@ -39,6 +39,10 @@ This dataset packages:
 - CMS NPPES bulk dissemination files + CMS NPI Registry API (for NPI/provider metadata)
 - NLM Clinical Tables HCPCS API (for HCPCS/CPT code metadata)
 
+## Source Repository
+
+Project code, build scripts, and pipeline logic live at: [ToadResearch/Medicaid_Provider_Spending](https://github.com/ToadResearch/Medicaid_Provider_Spending).
+
 
 
 ## Data Splits
